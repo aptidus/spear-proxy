@@ -148,15 +148,22 @@ const MODEL_MAPPING: Record<string, string> = {
     "claude-sonnet-4-5": "claude-sonnet-4-5",
     "claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
     "claude-opus-4-5-thinking": "claude-opus-4-5-thinking",
+    "claude-sonnet-4-6": "claude-sonnet-4-6",
+    "claude-sonnet-4-6-thinking": "claude-sonnet-4-6-thinking",
     "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
     "claude-sonnet-4.5": "claude-sonnet-4-5",
     "claude-sonnet-4.5-thinking": "claude-sonnet-4-5-thinking",
     "claude-opus-4.5-thinking": "claude-opus-4-5-thinking",
+    "claude-sonnet-4.6": "claude-sonnet-4-6",
+    "claude-sonnet-4.6-thinking": "claude-sonnet-4-6-thinking",
     "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
     "claude-sonnet-4-5-20251001": "claude-sonnet-4-5",
+    "gemini-3-1-pro-high": "gemini-3-1-pro-high",
+    "gemini-3.1-pro-high": "gemini-3-1-pro-high",
     "gemini-3-pro-high": "gemini-3-pro-high",
     "gemini-3-pro-low": "gemini-3-pro-low",
     "gemini-3-flash": "gemini-3-flash",
+    "gemini-3-flash-thinking": "gemini-3-flash-thinking",
     "gpt-oss-120b": "gpt-oss-120b-medium",
 }
 
@@ -637,7 +644,7 @@ async function sendRequestSse(
                             }
                         }
                         const upstream = new UpstreamError("antigravity", 429, lastErrorText, lastRetryAfterHeader)
-                        ;(upstream as any).retryable = true
+                            ; (upstream as any).retryable = true
                         throw upstream
                     }
                     // Non-quota 429 with no rotation path
@@ -789,7 +796,7 @@ async function* sendRequestSseStreaming(
                             }
                         }
                         const upstream = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
-                        ;(upstream as any).retryable = true
+                            ; (upstream as any).retryable = true
                         throw upstream
                     }
                     if (shouldTryNextEndpoint(response.status)) {
@@ -902,7 +909,7 @@ async function* sendRequestSseStreaming(
             } catch (error) {
                 if (error instanceof UpstreamError) {
                     if (hasYielded) {
-                        ;(error as any).streamingStarted = true
+                        ; (error as any).streamingStarted = true
                     }
                     throw error
                 }
@@ -1003,12 +1010,12 @@ export async function createChatCompletionWithOptions(
     }
 
     try {
-    const antigravityRequest = claudeToAntigravity(
-        getAntigravityModelName(request.model),
-        request.messages,
-        request.tools,
-        request.toolChoice
-    )
+        const antigravityRequest = claudeToAntigravity(
+            getAntigravityModelName(request.model),
+            request.messages,
+            request.tools,
+            request.toolChoice
+        )
 
         if (projectId) antigravityRequest.project = projectId
 
@@ -1108,81 +1115,113 @@ export async function* createChatCompletionStreamWithOptions(
         let hasToolUse = false
         let outputTokens = 0
         let textBlockStarted = false
+        let thinkingBlockStarted = false
 
-    const messageStart = {
-        type: "message_start",
-        message: {
-            id: "msg_" + crypto.randomUUID().replace(/-/g, "").slice(0, 24),
-            type: "message",
-            role: "assistant",
-            content: [],
-            model: request.model,
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 0, output_tokens: 0 }
-        }
-    }
-    yield "event: message_start\ndata: " + JSON.stringify(messageStart) + "\n\n"
-
-    for await (const chunkStr of sseStream) {
-        // 解析 JSON 字符串
-        let chunk: any
-        try {
-            chunk = JSON.parse(chunkStr)
-        } catch {
-            continue
-        }
-
-        // chunk 可能直接是响应，也可能包含 response 字段
-        const responseData = chunk.response || chunk
-        const parts = responseData?.candidates?.[0]?.content?.parts || []
-
-        for (const part of parts) {
-            if (part.text) {
-                // 只在第一次遇到文本时发送 block_start
-                if (!textBlockStarted) {
-                    yield "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":" + blockIndex + ",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
-                    textBlockStarted = true
-                }
-                // 每个 text chunk 只发送 delta
-                const textDelta = { type: "content_block_delta", index: blockIndex, delta: { type: "text_delta", text: part.text } }
-                yield "event: content_block_delta\ndata: " + JSON.stringify(textDelta) + "\n\n"
+        const messageStart = {
+            type: "message_start",
+            message: {
+                id: "msg_" + crypto.randomUUID().replace(/-/g, "").slice(0, 24),
+                type: "message",
+                role: "assistant",
+                content: [],
+                model: request.model,
+                stop_reason: null,
+                stop_sequence: null,
+                usage: { input_tokens: 0, output_tokens: 0 }
             }
-            if (part.functionCall) {
-                // 先关闭文本块（如果有）
-                if (textBlockStarted) {
+        }
+        yield "event: message_start\ndata: " + JSON.stringify(messageStart) + "\n\n"
+
+        for await (const chunkStr of sseStream) {
+            // 解析 JSON 字符串
+            let chunk: any
+            try {
+                chunk = JSON.parse(chunkStr)
+            } catch {
+                continue
+            }
+
+            // chunk 可能直接是响应，也可能包含 response 字段
+            const responseData = chunk.response || chunk
+            const parts = responseData?.candidates?.[0]?.content?.parts || []
+
+            for (const part of parts) {
+                // 🆕 Thinking block support — Antigravity returns thinking as part.thought
+                if (part.thought) {
+                    // Close text block first if open
+                    if (textBlockStarted) {
+                        yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
+                        blockIndex++
+                        textBlockStarted = false
+                    }
+                    if (!thinkingBlockStarted) {
+                        const thinkingStart = { type: "content_block_start", index: blockIndex, content_block: { type: "thinking", thinking: "" } }
+                        yield "event: content_block_start\ndata: " + JSON.stringify(thinkingStart) + "\n\n"
+                        thinkingBlockStarted = true
+                    }
+                    const thinkingDelta = { type: "content_block_delta", index: blockIndex, delta: { type: "thinking_delta", thinking: part.thought } }
+                    yield "event: content_block_delta\ndata: " + JSON.stringify(thinkingDelta) + "\n\n"
+                }
+                if (part.text) {
+                    // Close thinking block first if open
+                    if (thinkingBlockStarted) {
+                        yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
+                        blockIndex++
+                        thinkingBlockStarted = false
+                    }
+                    // 只在第一次遇到文本时发送 block_start
+                    if (!textBlockStarted) {
+                        yield "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":" + blockIndex + ",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+                        textBlockStarted = true
+                    }
+                    // 每个 text chunk 只发送 delta
+                    const textDelta = { type: "content_block_delta", index: blockIndex, delta: { type: "text_delta", text: part.text } }
+                    yield "event: content_block_delta\ndata: " + JSON.stringify(textDelta) + "\n\n"
+                }
+                if (part.functionCall) {
+                    // 先关闭文本块（如果有）
+                    if (thinkingBlockStarted) {
+                        yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
+                        blockIndex++
+                        thinkingBlockStarted = false
+                    }
+                    if (textBlockStarted) {
+                        yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
+                        blockIndex++
+                        textBlockStarted = false
+                    }
+
+                    hasToolUse = true
+                    const toolStart = { type: "content_block_start", index: blockIndex, content_block: { type: "tool_use", id: part.functionCall.id || generateToolUseId(), name: part.functionCall.name, input: {} } }
+                    yield "event: content_block_start\ndata: " + JSON.stringify(toolStart) + "\n\n"
+                    if (part.functionCall.args) {
+                        const rawArgs = part.functionCall.args
+                        const partialJson = typeof rawArgs === "string" ? rawArgs : (JSON.stringify(rawArgs) || "{}")
+                        const inputDelta = { type: "content_block_delta", index: blockIndex, delta: { type: "input_json_delta", partial_json: partialJson } }
+                        yield "event: content_block_delta\ndata: " + JSON.stringify(inputDelta) + "\n\n"
+                    }
                     yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
                     blockIndex++
-                    textBlockStarted = false
                 }
-
-                hasToolUse = true
-                const toolStart = { type: "content_block_start", index: blockIndex, content_block: { type: "tool_use", id: part.functionCall.id || generateToolUseId(), name: part.functionCall.name, input: {} } }
-                yield "event: content_block_start\ndata: " + JSON.stringify(toolStart) + "\n\n"
-                if (part.functionCall.args) {
-                    const rawArgs = part.functionCall.args
-                    const partialJson = typeof rawArgs === "string" ? rawArgs : (JSON.stringify(rawArgs) || "{}")
-                    const inputDelta = { type: "content_block_delta", index: blockIndex, delta: { type: "input_json_delta", partial_json: partialJson } }
-                    yield "event: content_block_delta\ndata: " + JSON.stringify(inputDelta) + "\n\n"
-                }
-                yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
-                blockIndex++
             }
-        }
 
             const usage = responseData?.usageMetadata
             if (usage) outputTokens = (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0)
         }
 
+        // 关闭最后的思考块（如果有）
+        if (thinkingBlockStarted) {
+            yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
+        }
         // 关闭最后的文本块（如果有）
         if (textBlockStarted) {
             yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
         }
 
-    if (!hasToolUse && request.toolChoice?.type === "tool") {
-        consola.warn(`Tool choice "${request.toolChoice.name || "unknown"}" requested but no tool_use returned`)
-    }
-    const stopReason = hasToolUse ? "tool_use" : "end_turn"
+        if (!hasToolUse && request.toolChoice?.type === "tool") {
+            consola.warn(`Tool choice "${request.toolChoice.name || "unknown"}" requested but no tool_use returned`)
+        }
+        const stopReason = hasToolUse ? "tool_use" : "end_turn"
         const messageDelta = { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outputTokens } }
         yield "event: message_delta\ndata: " + JSON.stringify(messageDelta) + "\n\n"
         yield "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
