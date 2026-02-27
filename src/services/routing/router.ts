@@ -58,6 +58,11 @@ function normalizeOfficialModelId(model: string): string {
         "claude-sonnet-4.6": "claude-sonnet-4-6",
         "claude-sonnet-4.6-thinking": "claude-sonnet-4-6-thinking",
         "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
+        // Non-thinking aliases → route to thinking variants
+        "claude-opus-4-6": "claude-opus-4-6-thinking",
+        "claude-opus-4-5": "claude-opus-4-5-thinking",
+        "claude-sonnet-4-6": "claude-sonnet-4-6-thinking",
+        "claude-sonnet-4-5": "claude-sonnet-4-5-thinking",
         "gemini-3.1-pro-high": "gemini-3-1-pro-high",
     }
     return map[normalized] || normalized
