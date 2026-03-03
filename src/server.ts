@@ -19,6 +19,7 @@ import { getAggregatedQuota } from "./services/quota-aggregator"
 import { initAuth, isAuthenticated } from "./services/antigravity/login"
 import { accountManager } from "./services/antigravity/account-manager"
 import { loadRoutingConfig } from "./services/routing/config"
+import { getProviderModels } from "./services/routing/models"
 import { importCodexAuthSources, removeCodexAuthArtifacts } from "./services/codex/oauth"
 import { loadSettings, saveSettings } from "./services/settings"
 import { pingAccount } from "./services/ping"
@@ -327,7 +328,20 @@ const modelsHandler = (c: any) => {
     const seen = new Set<string>()
     const hasAntigravityAccounts = accountManager.count() > 0
     const baseModels = hasAntigravityAccounts ? AVAILABLE_MODELS : []
-    const models = [...baseModels, ...routeModels].filter(model => {
+
+    // Include models from all configured providers (anthropic, codex, copilot)
+    const providerModels: Array<{ id: string; name: string; owned_by?: string }> = []
+    for (const provider of ["anthropic", "codex", "copilot"] as const) {
+        const accounts = authStore.listAccounts(provider)
+        if (accounts.length > 0) {
+            const pModels = getProviderModels(provider)
+            for (const m of pModels) {
+                providerModels.push({ id: m.id, name: m.label || m.id, owned_by: provider })
+            }
+        }
+    }
+
+    const models = [...baseModels, ...providerModels, ...routeModels].filter(model => {
         if (seen.has(model.id)) return false
         seen.add(model.id)
         return true
