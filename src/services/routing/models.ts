@@ -78,6 +78,25 @@ export function clearDynamicCopilotModels(): void {
     dynamicCopilotModels = []
 }
 
+const ANTHROPIC_MODELS: ProviderModelOption[] = [
+    { id: "claude-opus-4-6-thinking", label: "Anthropic - Opus 4.6 Thinking" },
+    { id: "claude-opus-4-6", label: "Anthropic - Opus 4.6" },
+    { id: "claude-sonnet-4-6", label: "Anthropic - Sonnet 4.6" },
+    { id: "claude-sonnet-4-6-thinking", label: "Anthropic - Sonnet 4.6 Thinking" },
+    { id: "claude-opus-4-5", label: "Anthropic - Opus 4.5" },
+    { id: "claude-opus-4-5-thinking", label: "Anthropic - Opus 4.5 Thinking" },
+    { id: "claude-sonnet-4-5", label: "Anthropic - Sonnet 4.5" },
+    { id: "claude-sonnet-4-5-thinking", label: "Anthropic - Sonnet 4.5 Thinking" },
+    { id: "claude-sonnet-4", label: "Anthropic - Sonnet 4" },
+    { id: "claude-haiku-4-5", label: "Anthropic - Haiku 4.5" },
+]
+
+let dynamicAnthropicModels: ProviderModelOption[] = []
+
+export function setDynamicAnthropicModels(models: ProviderModelOption[]): void {
+    dynamicAnthropicModels = sanitizeModelOptions(models)
+}
+
 export function getProviderModels(provider: AuthProvider): ProviderModelOption[] {
     if (provider === "antigravity") {
         return AVAILABLE_MODELS.map(model => ({
@@ -93,6 +112,10 @@ export function getProviderModels(provider: AuthProvider): ProviderModelOption[]
     if (provider === "codex") {
         // ChatGPT Plus Codex only supports gpt-5 series models
         return CODEX_MODELS.filter(model => !CODEX_HIDDEN_MODELS.has(model.id))
+    }
+
+    if (provider === "anthropic") {
+        return mergeModelOptions(dynamicAnthropicModels, ANTHROPIC_MODELS)
     }
 
     return []

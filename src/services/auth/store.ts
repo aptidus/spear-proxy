@@ -52,6 +52,7 @@ function storedTypeToProvider(type: string): AuthProvider | null {
     if (type === "github-copilot" || type === "copilot") return "copilot"
     if (type === "antigravity") return "antigravity"
     if (type === "codex") return "codex"
+    if (type === "anthropic") return "anthropic"
     return null
 }
 

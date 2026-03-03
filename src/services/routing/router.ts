@@ -4,6 +4,7 @@ import { createChatCompletionWithOptions, createChatCompletionStreamWithOptions 
 import { accountManager } from "~/services/antigravity/account-manager"
 import { createCodexCompletion } from "~/services/codex/chat"
 import { createCopilotCompletion } from "~/services/copilot/chat"
+import { createAnthropicCompletion } from "~/services/anthropic/chat"
 import { authStore } from "~/services/auth/store"
 import type { ProviderAccount } from "~/services/auth/types"
 import { loadRoutingConfig, type RoutingEntry, type RoutingConfig, type AccountRoutingEntry } from "./config"
@@ -77,7 +78,7 @@ function isEntryUsable(entry: RoutingEntry): boolean {
 
 // 🆕 Router 级别的 rate-limit 状态（独立于 accountManager）
 const routerRateLimits = new Map<string, number>()  // "provider:accountId" -> expiry timestamp
-const PROVIDER_ORDER: AuthProvider[] = ["antigravity", "codex", "copilot"]
+const PROVIDER_ORDER: AuthProvider[] = ["antigravity", "codex", "copilot", "anthropic"]
 const flowStickyStates = new Map<string, FlowStickyState>()
 const accountStickyStates = new Map<string, AccountStickyState>()
 
@@ -517,6 +518,15 @@ async function createFlowCompletionWithEntries(request: RoutedRequest, entries: 
             return result
         }
 
+        if (entry.provider === "anthropic") {
+            const startTime = Date.now()
+            const result = await createAnthropicCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+            recordProviderUsage(entry.modelId, result)
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+            console.log(formatSuccessLine({ elapsed, model: request.model, provider: "anthropic", account: accountDisplay, routeTag: "fr" }))
+            return result
+        }
+
         throw new Error("Unsupported provider")
     }
 
@@ -704,6 +714,16 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
                 accountState.cursor = index
                 return result
             }
+
+            if (entry.provider === "anthropic") {
+                const startTime = Date.now()
+                const result = await createAnthropicCompletion(account, request.model, request.messages, request.tools, request.maxTokens)
+                recordProviderUsage(request.model, result)
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+                console.log(formatSuccessLine({ elapsed, model: request.model, provider: "anthropic", account: accountDisplay, routeTag: "ar" }))
+                accountState.cursor = index
+                return result
+            }
         } catch (error) {
             lastError = error as Error
             if (entry.provider === "antigravity" && isAccountUnavailableError(error)) {
@@ -803,6 +823,9 @@ async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, en
         } else if (entry.provider === "copilot") {
             startTime = Date.now()
             completion = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+        } else if (entry.provider === "anthropic") {
+            startTime = Date.now()
+            completion = await createAnthropicCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
         }
 
         if (!completion) {

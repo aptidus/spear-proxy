@@ -9,6 +9,7 @@ import { state } from "~/lib/state"
 import { authStore } from "~/services/auth/store"
 import { debugCodexOAuth, importCodexAuthSources, startCodexCliLogin, getCodexCliLoginStatus } from "~/services/codex/oauth"
 import { startCopilotDeviceFlow, pollCopilotSession, importCopilotAuthFiles } from "~/services/copilot/oauth"
+import { startAnthropicOAuth, completeAnthropicOAuth, getAnthropicSession } from "~/services/anthropic/oauth"
 
 export const authRouter = new Hono()
 
@@ -29,6 +30,7 @@ authRouter.get("/accounts", (c) => {
             antigravity: authStore.listSummaries("antigravity"),
             codex: authStore.listSummaries("codex"),
             copilot: authStore.listSummaries("copilot"),
+            anthropic: authStore.listSummaries("anthropic"),
         },
     })
 })
@@ -129,6 +131,17 @@ authRouter.post("/login", async (c) => {
             }, 400)
         }
 
+        if (provider === "anthropic") {
+            const session = await startAnthropicOAuth()
+            return c.json({
+                success: true,
+                status: "pending",
+                provider: "anthropic",
+                session_id: session.id,
+                auth_url: session.authUrl,
+            })
+        }
+
         // 默认 Antigravity
         if (!body.accessToken) {
             // Railway-compatible flow: use localhost redirect (the only URI Google allows),
@@ -213,6 +226,25 @@ authRouter.get("/codex/debug", async (c) => {
     try {
         const result = await debugCodexOAuth()
         return c.json({ success: true, ...result })
+    } catch (error) {
+        return c.json({ success: false, error: (error as Error).message }, 500)
+    }
+})
+
+// Anthropic OAuth exchange (code#state paste flow)
+authRouter.post("/anthropic/exchange", async (c) => {
+    try {
+        const body = await c.req.json() as { session_id: string; auth_code: string }
+        if (!body.session_id || !body.auth_code) {
+            return c.json({ success: false, error: "session_id and auth_code required" }, 400)
+        }
+        const session = await completeAnthropicOAuth(body.session_id, body.auth_code)
+        return c.json({
+            success: true,
+            authenticated: true,
+            provider: "anthropic",
+            email: session.account?.email,
+        })
     } catch (error) {
         return c.json({ success: false, error: (error as Error).message }, 500)
     }
