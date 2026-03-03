@@ -3,7 +3,8 @@
  * 基于 CLIProxyAPI 的实现
  */
 
-import https from "https"
+
+
 import { state } from "~/lib/state"
 import { getAntigravityUserAgent } from "~/lib/antigravity-client"
 
@@ -218,60 +219,39 @@ export async function fetchInsecureJson(
     url: string,
     options: { method?: string; headers?: Record<string, string>; body?: string }
 ): Promise<InsecureResponse> {
-    const target = new URL(url)
     const method = options.method || "GET"
-    const headers = {
+    const headers: Record<string, string> = {
         "User-Agent": "anti-api",
         ...(options.headers || {}),
     }
-    const agent = new https.Agent({ rejectUnauthorized: false })
 
-    return new Promise((resolve, reject) => {
-        const req = https.request(
-            {
-                protocol: target.protocol,
-                hostname: target.hostname,
-                port: target.port || 443,
-                path: `${target.pathname}${target.search}`,
-                method,
-                headers,
-                agent,
-                rejectUnauthorized: false,
-                timeout: 10000,
-            },
-            (res) => {
-                let body = ""
-                res.on("data", (chunk) => {
-                    body += chunk
-                })
-                res.on("end", () => {
-                    let data: any = null
-                    if (body) {
-                        try {
-                            data = JSON.parse(body)
-                        } catch {
-                            data = null
-                        }
-                    }
-                    resolve({
-                        status: res.statusCode || 0,
-                        data,
-                        text: body,
-                    })
-                })
-            }
-        )
-
-        req.on("error", reject)
-        req.on("timeout", () => {
-            req.destroy(new Error("Request timed out"))
-        })
-
-        if (options.body) {
-            req.write(options.body)
+    try {
+        const fetchOpts: any = {
+            method,
+            headers,
+            body: options.body || undefined,
+            signal: AbortSignal.timeout(10000),
+            tls: { rejectUnauthorized: false },
         }
-        req.end()
-    })
+        const proxyUrl = process.env.RELAY_PROXY_URL
+        if (proxyUrl) {
+            fetchOpts.proxy = proxyUrl
+        }
+
+        const response = await fetch(url, fetchOpts)
+        const body = await response.text()
+        let data: any = null
+        if (body) {
+            try {
+                data = JSON.parse(body)
+            } catch {
+                data = null
+            }
+        }
+        return { status: response.status, data, text: body }
+    } catch (error: any) {
+        throw new Error(`fetchInsecureJson failed for ${url}: ${error.message}`)
+    }
 }
 
 /**
