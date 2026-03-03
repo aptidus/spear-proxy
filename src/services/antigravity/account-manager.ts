@@ -189,13 +189,20 @@ class AccountManager {
 
     /**
      * 加载账号列表
+     * authStore is the source of truth (individual JSON files per account)
+     * dataFile (accounts.json) is a legacy secondary source
      */
     load(): void {
+        // 1. Always load from authStore first (source of truth)
+        this.hydrateFromAuthStore()
+
+        // 2. Merge from legacy dataFile (only accounts NOT already loaded)
         try {
             if (fs.existsSync(this.dataFile)) {
                 const data = JSON.parse(fs.readFileSync(this.dataFile, "utf-8"))
                 if (Array.isArray(data.accounts)) {
                     for (const acc of data.accounts) {
+                        if (this.accounts.has(acc.id)) continue // already from authStore
                         this.accounts.set(acc.id, {
                             ...acc,
                             rateLimitedUntil: null,
@@ -215,11 +222,7 @@ class AccountManager {
                 }
             }
         } catch (e) {
-            consola.warn("Failed to load accounts:", e)
-        }
-
-        if (this.accounts.size === 0) {
-            this.hydrateFromAuthStore()
+            consola.warn("Failed to load accounts from dataFile:", e)
         }
 
         // 如果没有已保存的账号，从 state 迁移当前账号
@@ -581,24 +584,24 @@ class AccountManager {
                 if (hasIdleAccount && this.inFlightAccounts.has(firstId)) {
                     // Prefer idle accounts when available
                 } else {
-                // 刷新 token 如果需要
-                if (firstAccount.expiresAt > 0 && now > firstAccount.expiresAt - 5 * 60 * 1000) {
-                    try {
-                        const tokens = await refreshAccessToken(firstAccount.refreshToken)
-                        firstAccount.accessToken = tokens.accessToken
-                        firstAccount.expiresAt = now + tokens.expiresIn * 1000
-                        this.save()
-                    } catch (e) {
-                        consola.warn(`Failed to refresh token for ${firstAccount.email}:`, e)
+                    // 刷新 token 如果需要
+                    if (firstAccount.expiresAt > 0 && now > firstAccount.expiresAt - 5 * 60 * 1000) {
+                        try {
+                            const tokens = await refreshAccessToken(firstAccount.refreshToken)
+                            firstAccount.accessToken = tokens.accessToken
+                            firstAccount.expiresAt = now + tokens.expiresIn * 1000
+                            this.save()
+                        } catch (e) {
+                            consola.warn(`Failed to refresh token for ${firstAccount.email}:`, e)
+                        }
                     }
-                }
-                this.lastUsedAccount = { accountId: firstAccount.id, timestamp: now }
-                return {
-                    accessToken: firstAccount.accessToken,
-                    projectId: await this.ensureProjectId(firstAccount),
-                    email: firstAccount.email,
-                    accountId: firstAccount.id,
-                }
+                    this.lastUsedAccount = { accountId: firstAccount.id, timestamp: now }
+                    return {
+                        accessToken: firstAccount.accessToken,
+                        projectId: await this.ensureProjectId(firstAccount),
+                        email: firstAccount.email,
+                        accountId: firstAccount.id,
+                    }
                 }
             }
         }
