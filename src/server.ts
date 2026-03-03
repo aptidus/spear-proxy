@@ -74,7 +74,7 @@ if (API_SECRET) {
         const path = c.req.path
 
         // Always public
-        if (path === "/health" || path === "/oauth-callback" || path.startsWith("/debug")) {
+        if (path === "/health" || path === "/oauth-callback") {
             return next()
         }
 
@@ -655,34 +655,8 @@ server.all("/v1internal*", async (c) => {
 })
 
 
-// Debug: raw upstream model names from antigravity API
-server.get("/debug/upstream-models", async (c) => {
-    try {
-        const { fetchAntigravityModels } = await import("./services/antigravity/quota-fetch")
-        const accounts = authStore.listAccounts("antigravity")
-        if (accounts.length === 0) return c.json({ error: "no antigravity accounts" })
-        const account = accounts[0]
-        const result = await fetchAntigravityModels(account.accessToken, account.projectId)
-        return c.json({ models: Object.keys(result.models), raw: result.models })
-    } catch (e) {
-        return c.json({ error: String(e) }, 500)
-    }
-})
-
 // 健康检查
-server.get("/health", async (c) => {
-    const showModels = new URL(c.req.url).searchParams.get("models")
-    if (showModels) {
-        try {
-            const { fetchAntigravityModels } = await import("./services/antigravity/quota-fetch")
-            const accounts = authStore.listAccounts("antigravity")
-            if (accounts.length === 0) return c.json({ error: "no antigravity accounts" })
-            const account = accounts[0]
-            const result = await fetchAntigravityModels(account.accessToken, account.projectId)
-            return c.json({ models: Object.keys(result.models), raw: result.models })
-        } catch (e) {
-            return c.json({ error: String(e) }, 500)
-        }
-    }
-    return c.json({ status: "ok", authenticated: isAuthenticated() })
-})
+server.get("/health", (c) => c.json({
+    status: "ok",
+    authenticated: isAuthenticated(),
+}))
