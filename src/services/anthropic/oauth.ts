@@ -119,14 +119,70 @@ export async function completeAnthropicOAuth(
 
         const expiresAt = Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000
 
-        // Decode the access token to get user info (it's a JWT)
+        // Fetch user profile and organization info from Anthropic API
         let email = "anthropic-user"
+        let organizationId: string | undefined
+
+        // Try to get email from JWT payload first
         try {
             const payload = tokenData.access_token.split(".")[1]
-            const decoded = JSON.parse(Buffer.from(payload, "base64").toString())
-            email = decoded.email || decoded.sub || "anthropic-user"
+            if (payload) {
+                const decoded = JSON.parse(Buffer.from(payload, "base64").toString())
+                if (decoded.email) email = decoded.email
+                if (decoded.sub) email = decoded.sub
+                if (decoded.organization_id) organizationId = decoded.organization_id
+                consola.info(`[anthropic] JWT decoded:`, JSON.stringify(decoded).substring(0, 300))
+            }
         } catch {
-            // fallback
+            // JWT decode failed, try API
+        }
+
+        // Try to fetch user/org info from API
+        try {
+            const profileRes = await proxyFetch("https://api.anthropic.com/v1/organizations", {
+                headers: {
+                    "Authorization": `Bearer ${tokenData.access_token}`,
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+                    "user-agent": "claude-cli/2.1.2 (external, cli)",
+                    "x-app": "cli",
+                },
+            })
+            const profileBody = await profileRes.text()
+            consola.info(`[anthropic] Orgs endpoint: ${profileRes.status}, body: ${profileBody.substring(0, 500)}`)
+
+            if (profileRes.ok) {
+                const orgData = JSON.parse(profileBody)
+                // Could be an array of orgs or a single org object
+                const org = Array.isArray(orgData) ? orgData[0] : (orgData.data?.[0] || orgData)
+                if (org?.id) organizationId = org.id
+                if (org?.name) email = org.name
+                if (org?.email) email = org.email
+            }
+        } catch (profileErr) {
+            consola.warn(`[anthropic] Failed to fetch org info:`, profileErr)
+        }
+
+        // Also try /v1/me or userinfo endpoint for email
+        if (email === "anthropic-user") {
+            try {
+                const meRes = await proxyFetch("https://api.anthropic.com/v1/me", {
+                    headers: {
+                        "Authorization": `Bearer ${tokenData.access_token}`,
+                        "anthropic-version": "2023-06-01",
+                        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+                    },
+                })
+                const meBody = await meRes.text()
+                consola.info(`[anthropic] /v1/me endpoint: ${meRes.status}, body: ${meBody.substring(0, 500)}`)
+                if (meRes.ok) {
+                    const meData = JSON.parse(meBody)
+                    if (meData.email) email = meData.email
+                    if (meData.name) email = meData.name
+                }
+            } catch {
+                // ignore
+            }
         }
 
         const account: ProviderAccount = {
@@ -138,6 +194,7 @@ export async function completeAnthropicOAuth(
             refreshToken: tokenData.refresh_token,
             expiresAt,
             createdAt: new Date().toISOString(),
+            organizationId,
         }
 
         authStore.saveAccount(account)

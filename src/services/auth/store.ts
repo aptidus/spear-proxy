@@ -20,6 +20,7 @@ interface StoredAuthFile {
     project_id?: string
     created_at?: string
     updated_at?: string
+    organization_id?: string
 }
 
 type RateLimitState = {
@@ -94,6 +95,7 @@ function loadAccountFromFile(path: string): ProviderAccount | null {
             authSource: raw.auth_source as ProviderAccount["authSource"],
             createdAt: raw.created_at,
             updatedAt: raw.updated_at,
+            organizationId: raw.organization_id,
         }
     } catch (error) {
         consola.warn("Failed to parse auth file:", path, error)
@@ -121,6 +123,7 @@ function writeAccountFile(account: ProviderAccount): void {
         project_id: account.projectId,
         created_at: account.createdAt || now,
         updated_at: now,
+        organization_id: account.organizationId,
     }
 
     writeFileSync(path, JSON.stringify(payload, null, 2))
