@@ -12,6 +12,8 @@ import { getAnthropicRateLimits, getAnthropicUsageTracking } from "~/services/an
 import { UpstreamError } from "~/lib/error"
 import { getDataDir } from "~/lib/data-dir"
 
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
+
 type ModelInfo = AntigravityModelInfo
 
 type AccountBar = {
@@ -554,6 +556,91 @@ function isAuthError(error: unknown): boolean {
     return false
 }
 
+async function fetchClaudeUsage(account: ProviderAccount, orgId: string, proxyUrl?: string): Promise<AccountBar[] | null> {
+    // Try multiple candidate endpoints for the claude.ai usage API
+    const endpoints = [
+        `https://claude.ai/api/organizations/${orgId}/rate_limit_usage`,
+        `https://claude.ai/api/organizations/${orgId}/usage`,
+        `https://api.anthropic.com/v1/organizations/${orgId}/rate_limit_usage`,
+    ]
+
+    for (const url of endpoints) {
+        try {
+            const fetchOpts: any = {
+                headers: {
+                    "Authorization": `Bearer ${account.accessToken}`,
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+                    "user-agent": "claude-cli/2.1.2 (external, cli)",
+                    "x-app": "cli",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            }
+            if (proxyUrl) {
+                fetchOpts.proxy = proxyUrl
+            }
+
+            const res = await fetch(url, fetchOpts)
+            const bodyText = await res.text()
+            consola.info(`[anthropic] Usage endpoint ${url}: ${res.status}, body: ${bodyText.substring(0, 500)}`)
+
+            if (res.ok && bodyText) {
+                try {
+                    const data = JSON.parse(bodyText)
+                    consola.info(`[anthropic] Usage data parsed:`, JSON.stringify(data).substring(0, 500))
+
+                    // Try to extract usage bars from the response
+                    // The exact format depends on what Anthropic returns
+                    if (data.usage || data.rate_limits || data.limits) {
+                        const usageData = data.usage || data.rate_limits || data.limits || data
+                        const bars: AccountBar[] = []
+
+                        // Generic extraction: look for percentage/used/limit fields
+                        if (Array.isArray(usageData)) {
+                            for (const item of usageData) {
+                                const pct = item.percentage_used ?? item.percent_used ?? item.usage_percent ?? null
+                                bars.push({
+                                    key: item.name || item.type || item.model || "usage",
+                                    label: `${item.name || item.type || "usage"}: ${pct !== null ? pct + "%" : "active"}`,
+                                    percentage: pct !== null ? Math.round(100 - pct) : 100,
+                                    resetTime: item.resets_at || item.reset_time || undefined,
+                                })
+                            }
+                        } else if (typeof usageData === "object") {
+                            for (const [key, val] of Object.entries(usageData)) {
+                                if (typeof val === "object" && val !== null) {
+                                    const v = val as any
+                                    const pct = v.percentage_used ?? v.percent_used ?? null
+                                    bars.push({
+                                        key,
+                                        label: `${key}: ${pct !== null ? pct + "%" : "active"}`,
+                                        percentage: pct !== null ? Math.round(100 - pct) : 100,
+                                        resetTime: v.resets_at || v.reset_time || undefined,
+                                    })
+                                }
+                            }
+                        }
+
+                        if (bars.length > 0) {
+                            return bars
+                        }
+                    }
+
+                    // If we got a 200 but can't parse usage, log it and continue
+                    consola.info(`[anthropic] Got 200 from ${url} but couldn't parse usage bars from response`)
+                } catch (parseErr) {
+                    consola.warn(`[anthropic] Failed to parse usage response from ${url}:`, parseErr)
+                }
+            }
+        } catch (err) {
+            consola.debug(`[anthropic] Usage endpoint ${url} failed:`, err)
+        }
+    }
+
+    return null
+}
+
 async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<AccountQuotaView[]> {
     const promises = accounts.map(async (account) => {
         try {
@@ -640,8 +727,27 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                 }
             }
 
-            // Fallback: check token validity AND capture any rate limit headers
+            // Try to fetch real usage data from claude.ai internal API
             const proxyUrl = process.env.RELAY_PROXY_URL
+            const orgId = account.organizationId || "65d81213-561a-4897-8490-98537e3c7bdb"
+            const usageBars = await fetchClaudeUsage(account, orgId, proxyUrl)
+            if (usageBars) {
+                updateQuotaCache({
+                    provider: "anthropic",
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars: usageBars,
+                    updatedAt: new Date().toISOString(),
+                })
+                return {
+                    provider: "anthropic" as const,
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars: usageBars,
+                }
+            }
+
+            // Fallback: check token validity via models endpoint
             const fetchOptions: any = {
                 headers: {
                     "Authorization": `Bearer ${account.accessToken}`,
@@ -655,54 +761,31 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                 fetchOptions.proxy = proxyUrl
             }
             const response = await fetch("https://api.anthropic.com/v1/models", fetchOptions)
+            const isValid = response.ok
 
-            // Log all response headers for debugging (helps determine what Anthropic Max returns)
-            const headerMap: Record<string, string> = {}
-            response.headers.forEach((value: string, key: string) => {
-                headerMap[key] = value
-            })
-            consola.info(`[anthropic] Models check for ${account.id}: ${response.status}, headers:`, JSON.stringify(headerMap))
-
-            // Check if rate limit headers are present
-            const reqLimit = response.headers.get("anthropic-ratelimit-requests-limit")
-            const tokLimit = response.headers.get("anthropic-ratelimit-tokens-limit")
-
-            if (reqLimit || tokLimit) {
-                // Anthropic returns rate limit headers! Cache them and use for display
-                const reqRemaining = response.headers.get("anthropic-ratelimit-requests-remaining")
-                const reqReset = response.headers.get("anthropic-ratelimit-requests-reset")
-                const tokRemaining = response.headers.get("anthropic-ratelimit-tokens-remaining")
-                const tokReset = response.headers.get("anthropic-ratelimit-tokens-reset")
-
-                const rlData = {
-                    requestsLimit: parseInt(reqLimit || "0", 10),
-                    requestsRemaining: parseInt(reqRemaining || "0", 10),
-                    requestsReset: reqReset || "",
-                    tokensLimit: parseInt(tokLimit || "0", 10),
-                    tokensRemaining: parseInt(tokRemaining || "0", 10),
-                    tokensReset: tokReset || "",
-                    updatedAt: new Date().toISOString(),
-                }
-                // Log for debugging
-                consola.info(`[anthropic] Rate limits from models check: req ${rlData.requestsRemaining}/${rlData.requestsLimit}, tok ${rlData.tokensRemaining}/${rlData.tokensLimit}`)
-
-                const reqPercent = rlData.requestsLimit > 0
-                    ? Math.round((rlData.requestsRemaining / rlData.requestsLimit) * 100) : 0
-                const tokPercent = rlData.tokensLimit > 0
-                    ? Math.round((rlData.tokensRemaining / rlData.tokensLimit) * 100) : 0
-
+            // Use local usage tracking data if available 
+            const usage = getAnthropicUsageTracking(account.id)
+            if (usage) {
+                const windowStartMs = new Date(usage.windowStart).getTime()
+                const elapsed = Date.now() - windowStartMs
+                const remaining = Math.max(0, FIVE_HOURS_MS - elapsed)
+                const hoursLeft = Math.round(remaining / 3600000 * 10) / 10
+                const totalTokens = usage.inputTokens + usage.outputTokens
                 const bars: AccountBar[] = [
                     {
                         key: "requests",
-                        label: `req ${rlData.requestsRemaining}/${rlData.requestsLimit}`,
-                        percentage: reqPercent,
-                        resetTime: rlData.requestsReset || undefined,
+                        label: `${usage.requestCount} req`,
+                        percentage: isValid ? 100 : 0,
                     },
                     {
                         key: "tokens",
-                        label: `tok ${Math.round(rlData.tokensRemaining / 1000)}k/${Math.round(rlData.tokensLimit / 1000)}k`,
-                        percentage: tokPercent,
-                        resetTime: rlData.tokensReset || undefined,
+                        label: `${Math.round(totalTokens / 1000)}k tok`,
+                        percentage: isValid ? 100 : 0,
+                    },
+                    {
+                        key: "window",
+                        label: `${hoursLeft}h left`,
+                        percentage: Math.round((remaining / FIVE_HOURS_MS) * 100),
                     },
                 ]
 
@@ -711,7 +794,7 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                     accountId: account.id,
                     displayName: account.email || account.id,
                     bars,
-                    updatedAt: rlData.updatedAt,
+                    updatedAt: new Date().toISOString(),
                 })
 
                 return {
@@ -722,11 +805,10 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                 }
             }
 
-            // No rate limit headers — show token status
-            const isValid = response.ok
+            // Absolute fallback: just show status
             const bar: AccountBar = {
                 key: "status",
-                label: "status",
+                label: isValid ? "active" : "invalid",
                 percentage: isValid ? 100 : 0,
             }
 

@@ -14,6 +14,7 @@ export interface ProviderAccount {
     authSource?: AuthSource
     createdAt?: string
     updatedAt?: string
+    organizationId?: string
 }
 
 export interface ProviderAccountSummary {
