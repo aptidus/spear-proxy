@@ -471,13 +471,16 @@ function claudeToAntigravity(
     // Gemini 3+ Pro models have built-in thinking even without "thinking" in name
     // For Sonnet 4.6: upstream only has "claude-sonnet-4-6" (no -thinking variant)
     // but we still need thinkingConfig when the original request had -thinking
-    const isThinkingModel = model.includes("thinking")
-        || originalModel.includes("thinking")
-        || model.includes("gemini-3.1-pro")
+    // NOTE: thinkingConfig conflicts with tool calling on some Gemini models —
+    // only enable thinking when explicitly requested OR when no tools are present
+    const hasTools = tools && tools.length > 0
+    const explicitThinking = model.includes("thinking") || originalModel.includes("thinking")
+    const implicitThinking = model.includes("gemini-3.1-pro")
         || model.includes("gemini-3-1-pro")
         || model.includes("gemini-3-pro")
         || model.includes("gemini-2.5-pro")
-        || model.includes("gemini-2-5-pro");
+        || model.includes("gemini-2-5-pro")
+    const isThinkingModel = explicitThinking || (implicitThinking && !hasTools)
     if (isThinkingModel) {
         generationConfig.thinkingConfig = {
             thinkingBudget: 10000,
