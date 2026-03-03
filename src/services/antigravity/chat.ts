@@ -426,7 +426,7 @@ function buildSystemInstruction(): any {
 
 function buildFunctionCallingConfig(toolChoice?: ChatRequest["toolChoice"]): any {
     if (!toolChoice) {
-        return { mode: "VALIDATED" }
+        return { mode: "AUTO" }
     }
 
     switch (toolChoice.type) {
@@ -441,7 +441,7 @@ function buildFunctionCallingConfig(toolChoice?: ChatRequest["toolChoice"]): any
             }
         case "auto":
         default:
-            return { mode: "VALIDATED" }
+            return { mode: "AUTO" }
     }
 }
 
