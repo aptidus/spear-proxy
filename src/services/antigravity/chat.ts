@@ -154,13 +154,13 @@ const MODEL_MAPPING: Record<string, string> = {
     "claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
     "claude-opus-4-5-thinking": "claude-opus-4-5-thinking",
     "claude-sonnet-4-6": "claude-sonnet-4-6",
-    "claude-sonnet-4-6-thinking": "claude-sonnet-4-6-thinking",
+    "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
     "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
     "claude-sonnet-4.5": "claude-sonnet-4-5",
     "claude-sonnet-4.5-thinking": "claude-sonnet-4-5-thinking",
     "claude-opus-4.5-thinking": "claude-opus-4-5-thinking",
     "claude-sonnet-4.6": "claude-sonnet-4-6",
-    "claude-sonnet-4.6-thinking": "claude-sonnet-4-6-thinking",
+    "claude-sonnet-4.6-thinking": "claude-sonnet-4-6",
     "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
     "claude-sonnet-4-5-20251001": "claude-sonnet-4-5",
     "gemini-3-1-pro-high": "gemini-3-1-pro-high",
@@ -446,8 +446,10 @@ function claudeToAntigravity(
     model: string,
     messages: ClaudeMessage[],
     tools?: ClaudeTool[],
-    toolChoice?: ChatRequest["toolChoice"]
+    toolChoice?: ChatRequest["toolChoice"],
+    originalModel?: string
 ): any {
+    if (!originalModel) originalModel = model
     const toolIdToName = new Map<string, string>()
     const contents = messages.map((msg) => ({
         role: msg.role === "assistant" ? "model" : msg.role,
@@ -464,7 +466,10 @@ function claudeToAntigravity(
 
     // Enable thinking output for thinking models
     // Gemini 3+ Pro models have built-in thinking even without "thinking" in name
+    // For Sonnet 4.6: upstream only has "claude-sonnet-4-6" (no -thinking variant)
+    // but we still need thinkingConfig when the original request had -thinking
     const isThinkingModel = model.includes("thinking")
+        || originalModel.includes("thinking")
         || model.includes("gemini-3-1-pro")
         || model.includes("gemini-3-pro")
         || model.includes("gemini-2.5-pro")
@@ -1049,7 +1054,8 @@ export async function createChatCompletionWithOptions(
             getAntigravityModelName(request.model),
             request.messages,
             request.tools,
-            request.toolChoice
+            request.toolChoice,
+            request.model
         )
 
         if (projectId) antigravityRequest.project = projectId
@@ -1130,7 +1136,8 @@ export async function* createChatCompletionStreamWithOptions(
             getAntigravityModelName(request.model),
             request.messages,
             request.tools,
-            request.toolChoice
+            request.toolChoice,
+            request.model
         )
 
         if (projectId) antigravityRequest.project = projectId
