@@ -147,6 +147,11 @@
             margin-left: 4px;
         }
 
+        .badge-anthropic {
+            background: #2d1a3e;
+            color: #d4a5ff;
+        }
+
         .tip {
             background: #0d1a2d;
             border-left: 3px solid #3b82f6;
@@ -309,13 +314,15 @@
 
         <!-- ============ BASE URL ============ -->
         <div class="en">
-            <p class="subtitle">OpenAI-compatible proxy for Antigravity models — works with OpenClaw, Claude Code,
+            <p class="subtitle">OpenAI-compatible proxy for Antigravity, Anthropic, Copilot, and Codex models — works
+                with OpenClaw, Claude Code,
                 Cursor, and any OpenAI-compatible client.</p>
             <h2>Base URL &amp; Authentication</h2>
             <p>All requests use this base URL and require an API key:</p>
         </div>
         <div class="cn">
-            <p class="subtitle">兼容 OpenAI 的 Antigravity 模型代理 — 适用于 OpenClaw、Claude Code、Cursor 及任何 OpenAI 兼容客户端。</p>
+            <p class="subtitle">兼容 OpenAI 的多提供商（Antigravity、Anthropic、Copilot、Codex）模型代理 — 适用于 OpenClaw、Claude
+                Code、Cursor 及任何 OpenAI 兼容客户端。</p>
             <h2>基础地址 &amp; 认证</h2>
             <p>所有请求使用以下基础地址，并需要 API 密钥：</p>
         </div>
@@ -371,6 +378,16 @@ API Key:  Authorization: Bearer ak-YOUR_API_KEY</pre>
                     <td><code>claude-sonnet-4-5</code></td>
                     <td><span class="badge badge-claude">Claude</span></td>
                     <td><span class="en">Balanced</span><span class="cn">平衡性能</span></td>
+                </tr>
+                <tr>
+                    <td><code>claude-sonnet-4</code></td>
+                    <td><span class="badge badge-claude">Claude</span></td>
+                    <td><span class="en">Efficient coding</span><span class="cn">高效编码</span></td>
+                </tr>
+                <tr>
+                    <td><code>claude-haiku-4-5</code></td>
+                    <td><span class="badge badge-claude">Claude</span></td>
+                    <td><span class="en">Ultra-fast, lightweight</span><span class="cn">极速轻量</span></td>
                 </tr>
                 <tr>
                     <td><code>gemini-3-1-pro-high</code></td>
