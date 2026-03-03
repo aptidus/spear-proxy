@@ -48,7 +48,7 @@ server.use(async (c, next) => {
         const ctx = getRequestLogContext()
         const method = c.req.method
         const path = c.req.path
-        const debugInfo = status === 400 ? ` (${method} ${path}${reason ? ` - ${reason}` : ""})` : ""
+        const debugInfo = ` (${method} ${path}${reason ? ` - ${reason}` : ""})`
         if (ctx.model && ctx.provider) {
             const providerNames: Record<string, string> = {
                 copilot: "GitHub Copilot",
