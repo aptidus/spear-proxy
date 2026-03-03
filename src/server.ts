@@ -74,7 +74,7 @@ if (API_SECRET) {
         const path = c.req.path
 
         // Always public
-        if (path === "/health" || path === "/oauth-callback") {
+        if (path === "/health" || path === "/oauth-callback" || path.startsWith("/debug")) {
             return next()
         }
 
@@ -654,13 +654,8 @@ server.all("/v1internal*", async (c) => {
     }
 })
 
-// 健康检查
-server.get("/health", (c) => c.json({
-    status: "ok",
-    authenticated: isAuthenticated(),
-}))
 
-// Debug: raw upstream model names
+// Debug: raw upstream model names from antigravity API
 server.get("/debug/upstream-models", async (c) => {
     try {
         const { fetchAntigravityModels } = await import("./services/antigravity/quota-fetch")
@@ -669,7 +664,13 @@ server.get("/debug/upstream-models", async (c) => {
         const account = accounts[0]
         const result = await fetchAntigravityModels(account.accessToken, account.projectId)
         return c.json({ models: Object.keys(result.models), raw: result.models })
-    } catch (e: any) {
-        return c.json({ error: e.message }, 500)
+    } catch (e) {
+        return c.json({ error: String(e) }, 500)
     }
 })
+
+// 健康检查
+server.get("/health", (c) => c.json({
+    status: "ok",
+    authenticated: isAuthenticated(),
+}))
