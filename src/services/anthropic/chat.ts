@@ -41,8 +41,21 @@ function captureRateLimitHeaders(accountId: string, response: Response): void {
     const tokRemaining = response.headers.get("anthropic-ratelimit-tokens-remaining")
     const tokReset = response.headers.get("anthropic-ratelimit-tokens-reset")
 
+    // Log all anthropic-related headers for debugging
+    const allHeaders: string[] = []
+    response.headers.forEach((value, key) => {
+        if (key.startsWith("anthropic") || key.startsWith("x-ratelimit") || key.includes("ratelimit") || key.includes("retry")) {
+            allHeaders.push(`${key}: ${value}`)
+        }
+    })
+    if (allHeaders.length > 0) {
+        consola.info(`[anthropic] Rate limit headers for ${accountId}: ${allHeaders.join(", ")}`)
+    } else {
+        consola.info(`[anthropic] No rate limit headers found for ${accountId}`)
+    }
+
     if (reqLimit || tokLimit) {
-        rateLimitCache.set(accountId, {
+        const data = {
             requestsLimit: parseInt(reqLimit || "0", 10),
             requestsRemaining: parseInt(reqRemaining || "0", 10),
             requestsReset: reqReset || "",
@@ -50,7 +63,9 @@ function captureRateLimitHeaders(accountId: string, response: Response): void {
             tokensRemaining: parseInt(tokRemaining || "0", 10),
             tokensReset: tokReset || "",
             updatedAt: new Date().toISOString(),
-        })
+        }
+        rateLimitCache.set(accountId, data)
+        consola.info(`[anthropic] Cached rate limits: req ${data.requestsRemaining}/${data.requestsLimit}, tok ${data.tokensRemaining}/${data.tokensLimit}`)
     }
 }
 
