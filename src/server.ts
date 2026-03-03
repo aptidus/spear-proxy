@@ -49,15 +49,6 @@ server.use(async (c, next) => {
         const method = c.req.method
         const path = c.req.path
 
-        // Suppress noisy dashboard/static 401s
-        if (status === 401 && !ctx.model) {
-            const dashboardPaths = ["/", "/quota", "/routing", "/settings", "/logs", "/remote-panel"]
-            if (dashboardPaths.some(p => path === p || path.startsWith(p + "/"))) {
-                // Silent — just an unauthenticated dashboard visit
-                return
-            }
-        }
-
         const debugInfo = ` (${method} ${path}${reason ? ` - ${reason}` : ""})`
         if (ctx.model && ctx.provider) {
             const providerNames: Record<string, string> = {
@@ -123,6 +114,15 @@ if (API_SECRET) {
             const keyParam = new URL(c.req.url).searchParams.get("key")
             if (keyParam === API_SECRET) {
                 c.header("Set-Cookie", `anti_api_session=${API_SECRET}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`)
+                return next()
+            }
+
+            // Check Bearer token or x-api-key header (for programmatic access from Spear Agents etc.)
+            const authHeader = c.req.header("Authorization") || ""
+            const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim()
+            const xApiKey = c.req.header("x-api-key") || ""
+            const headerToken = bearerToken || xApiKey
+            if (headerToken && (headerToken === API_SECRET || isValidKey(headerToken))) {
                 return next()
             }
 
