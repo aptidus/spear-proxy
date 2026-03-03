@@ -111,13 +111,13 @@ export async function completeAnthropicOAuth(
             throw new Error(`Token exchange failed: ${error}`)
         }
 
-        const tokenData = (await tokenResponse.json()) as {
-            access_token: string
-            refresh_token: string
-            expires_in: number
-        }
+        const tokenData = (await tokenResponse.json()) as Record<string, any>
+        // Log the full token response to see what fields are available
+        const tokenKeys = Object.keys(tokenData)
+        consola.info(`[anthropic] Token exchange response keys: ${tokenKeys.join(", ")}`)
+        consola.info(`[anthropic] Token exchange full response:`, JSON.stringify({ ...tokenData, access_token: tokenData.access_token?.substring(0, 30) + "...", refresh_token: "***" }))
 
-        const expiresAt = Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000
+        const expiresAt = Date.now() + (tokenData.expires_in || 3600) * 1000 - 5 * 60 * 1000
 
         // Fetch user profile and organization info from Anthropic API
         let email = "anthropic-user"
