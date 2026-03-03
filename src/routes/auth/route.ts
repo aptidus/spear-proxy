@@ -7,7 +7,7 @@ import { isAuthenticated, getUserInfo, setAuth, clearAuth, startOAuthLogin } fro
 import { accountManager } from "~/services/antigravity/account-manager"
 import { state } from "~/lib/state"
 import { authStore } from "~/services/auth/store"
-import { debugCodexOAuth, importCodexAuthSources, startCodexCliLogin, getCodexCliLoginStatus } from "~/services/codex/oauth"
+import { debugCodexOAuth, importCodexAuthSources, startCodexCliLogin, getCodexCliLoginStatus, startCodexOAuthSession, completeCodexOAuth } from "~/services/codex/oauth"
 import { startCopilotDeviceFlow, pollCopilotSession, importCopilotAuthFiles } from "~/services/copilot/oauth"
 import { startAnthropicOAuth, completeAnthropicOAuth, getAnthropicSession } from "~/services/anthropic/oauth"
 
@@ -88,47 +88,35 @@ authRouter.post("/login", async (c) => {
         }
 
         if (provider === "codex") {
-            if (forceInteractive) {
-                // 使用浏览器 OAuth 登录获取完整权限的 token
-                try {
-                    const { startCodexOAuthLogin } = await import("~/services/codex/oauth")
-                    const account = await startCodexOAuthLogin()
+            // Try importing existing auth files first (unless force interactive)
+            if (!forceInteractive) {
+                const result = await importCodexAuthSources()
+                if (result.accounts.length > 0) {
                     return c.json({
                         success: true,
                         provider: "codex",
                         status: "success",
-                        source: "browser-oauth",
-                        account: {
+                        source: "import",
+                        count: result.accounts.length,
+                        sources: result.sources,
+                        accounts: result.accounts.map(account => ({
                             id: account.id,
                             email: account.email,
                             source: account.authSource,
-                        },
+                        })),
                     })
-                } catch (error) {
-                    return c.json({ success: false, error: (error as Error).message }, 400)
                 }
             }
 
-            const result = await importCodexAuthSources()
-            if (result.accounts.length > 0) {
-                return c.json({
-                    success: true,
-                    provider: "codex",
-                    status: "success",
-                    source: "import",
-                    count: result.accounts.length,
-                    sources: result.sources,
-                    accounts: result.accounts.map(account => ({
-                        id: account.id,
-                        email: account.email,
-                        source: account.authSource,
-                    })),
-                })
-            }
+            // Railway-compatible flow: generate auth URL, user pastes redirect URL back
+            const { sessionId, authUrl } = startCodexOAuthSession()
             return c.json({
-                success: false,
-                error: "Codex auth files not found. Use force=true to login via browser.",
-            }, 400)
+                success: true,
+                status: "pending",
+                provider: "codex",
+                session_id: sessionId,
+                auth_url: authUrl,
+            })
         }
 
         if (provider === "anthropic") {
@@ -244,6 +232,26 @@ authRouter.post("/anthropic/exchange", async (c) => {
             authenticated: true,
             provider: "anthropic",
             email: session.account?.email,
+        })
+    } catch (error) {
+        return c.json({ success: false, error: (error as Error).message }, 500)
+    }
+})
+
+// Codex OAuth exchange (paste redirect URL flow)
+authRouter.post("/codex/exchange", async (c) => {
+    try {
+        const body = await c.req.json() as { session_id: string; redirect_url: string }
+        if (!body.session_id || !body.redirect_url) {
+            return c.json({ success: false, error: "session_id and redirect_url required" }, 400)
+        }
+        const account = await completeCodexOAuth(body.session_id, body.redirect_url)
+        return c.json({
+            success: true,
+            authenticated: true,
+            provider: "codex",
+            email: account.email,
+            id: account.id,
         })
     } catch (error) {
         return c.json({ success: false, error: (error as Error).message }, 500)

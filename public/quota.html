@@ -2044,10 +2044,6 @@
 
             try {
                 const payload = { provider };
-                if (provider === 'codex') {
-                    codexPopup = window.open('about:blank', '_blank');
-                    codexPopupUrl = null;
-                }
                 if (provider === 'copilot' || provider === 'codex') {
                     payload.force = true;
                 }
@@ -2075,12 +2071,6 @@
                     return;
                 }
 
-                if (provider === 'codex' && data.status === 'pending') {
-                    saveCodexSession(data.session_id, data);
-                    showCodexDeviceFlow(data);
-                    return;
-                }
-
                 if (provider === 'codex' && data.source === 'import') {
                     if (data.count && data.count > 1) {
                         setAddAccountStatus(`Imported ${data.count} Codex accounts`);
@@ -2089,7 +2079,36 @@
                         setAddAccountStatus(`Imported Codex: ${first.email || first.id || 'Codex'}`);
                     }
                     closeAddAccountModal();
-                } else if (provider === 'antigravity' && data.auth_url) {
+                    await checkAuthStatus();
+                    refreshAll(true);
+                    return;
+                }
+
+                if (provider === 'codex' && data.auth_url) {
+                    // Railway flow: open OpenAI login, then ask user to paste redirect URL
+                    window.open(data.auth_url, '_blank');
+                    setAddAccountStatus('');
+                    const statusEl = document.getElementById('add-account-status');
+                    statusEl.classList.remove('hidden');
+                    statusEl.innerHTML = `
+                        <div style="text-align:left;font-size:13px;line-height:1.6">
+                            <p style="margin-bottom:8px"><strong>Steps:</strong></p>
+                            <p>1. Sign in with OpenAI in the new tab</p>
+                            <p>2. After signing in, the page will show an error (this is normal)</p>
+                            <p>3. Copy the <strong>full URL</strong> from your browser's address bar</p>
+                            <p style="margin-top:8px">Paste the URL here:</p>
+                            <input id="codex-paste-url" type="text" placeholder="http://localhost:1455/auth/callback?code=..."
+                                style="width:100%;padding:8px 12px;margin-top:6px;background:#1a1a2e;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;outline:none" />
+                            <button onclick="submitCodexOAuthCode('${data.session_id}')"
+                                style="width:100%;margin-top:8px;padding:8px;background:#10b981;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer">
+                                Authenticate
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+
+                if (provider === 'antigravity' && data.auth_url) {
                     // Railway flow: open Google login, then ask user to paste redirect URL
                     window.open(data.auth_url, '_blank');
                     setAddAccountStatus('');
@@ -2161,6 +2180,35 @@
                 const data = await response.json();
                 if (data.success) {
                     setAddAccountStatus(`✓ Connected: ${data.email}`);
+                    setTimeout(() => {
+                        closeAddAccountModal();
+                        refreshAll(true);
+                    }, 1000);
+                } else {
+                    setAddAccountStatus(`Error: ${data.error || 'Authentication failed'}`);
+                }
+            } catch (error) {
+                setAddAccountStatus(`Error: ${error.message}`);
+            }
+        }
+
+        async function submitCodexOAuthCode(sessionId) {
+            const input = document.getElementById('codex-paste-url');
+            const url = input?.value?.trim();
+            if (!url) {
+                setAddAccountStatus('Please paste the redirect URL');
+                return;
+            }
+            setAddAccountStatus('Authenticating...');
+            try {
+                const response = await fetch(`${API_BASE}/auth/codex/exchange`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId, redirect_url: url })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    setAddAccountStatus(`✓ Connected: ${data.email || 'Codex'}`);
                     setTimeout(() => {
                         closeAddAccountModal();
                         refreshAll(true);

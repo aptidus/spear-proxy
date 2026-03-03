@@ -1033,6 +1033,117 @@ export async function startCodexOAuthLogin(): Promise<ProviderAccount> {
     return account
 }
 
+// ─── Railway-compatible Codex OAuth (paste-URL flow) ───
+
+interface PendingCodexOAuth {
+    state: string
+    codeVerifier?: string
+    redirectUri: string
+    createdAt: number
+}
+
+const pendingCodexSessions = new Map<string, PendingCodexOAuth>()
+
+/**
+ * Start a Codex OAuth session for Railway (no localhost callback server).
+ * Returns the auth URL for the user to open in their browser.
+ * After authenticating, they paste the redirect URL back.
+ */
+export function startCodexOAuthSession(): { sessionId: string; authUrl: string } {
+    const sessionId = crypto.randomUUID()
+    const state = crypto.randomUUID()
+    const redirectUri = `http://localhost:${CODEX_OAUTH_CONFIG.callbackPort}${CODEX_OAUTH_CONFIG.callbackPath}`
+
+    const params = new URLSearchParams({
+        client_id: CODEX_OAUTH_CONFIG.clientId,
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope: CODEX_OAUTH_CONFIG.scopes.join(" "),
+        state,
+        prompt: "login",
+        id_token_add_organizations: "true",
+        codex_cli_simplified_flow: "true",
+    })
+
+    const codeVerifier = CODEX_OAUTH_CONFIG.clientSecret ? undefined : generateCodeVerifier()
+    if (codeVerifier) {
+        params.set("code_challenge", generateCodeChallenge(codeVerifier))
+        params.set("code_challenge_method", "S256")
+    }
+
+    const authUrl = `${CODEX_OAUTH_CONFIG.authorizeUrl}?${params.toString()}`
+
+    pendingCodexSessions.set(sessionId, {
+        state,
+        codeVerifier,
+        redirectUri,
+        createdAt: Date.now(),
+    })
+
+    // Cleanup old sessions (> 10 min)
+    for (const [id, session] of pendingCodexSessions) {
+        if (Date.now() - session.createdAt > 600_000) {
+            pendingCodexSessions.delete(id)
+        }
+    }
+
+    return { sessionId, authUrl }
+}
+
+/**
+ * Complete a Codex OAuth session by exchanging the pasted redirect URL.
+ */
+export async function completeCodexOAuth(sessionId: string, redirectUrl: string): Promise<ProviderAccount> {
+    const session = pendingCodexSessions.get(sessionId)
+    if (!session) {
+        throw new Error("Codex OAuth session not found or expired")
+    }
+
+    // Parse code + state from pasted URL
+    let code: string | null = null
+    let returnedState: string | null = null
+    try {
+        const url = new URL(redirectUrl)
+        code = url.searchParams.get("code")
+        returnedState = url.searchParams.get("state")
+    } catch {
+        throw new Error("Invalid redirect URL")
+    }
+
+    if (!code) {
+        throw new Error("No authorization code found in URL")
+    }
+    if (returnedState && returnedState !== session.state) {
+        throw new Error("OAuth state mismatch")
+    }
+
+    pendingCodexSessions.delete(sessionId)
+
+    const tokenResponse = await exchangeCodexCode(code, session.redirectUri, session.codeVerifier)
+    const claims = tokenResponse.idToken ? decodeJwt(tokenResponse.idToken) : null
+    const email = claims?.email
+    const accountId = claims?.sub || email || `codex-${Date.now()}`
+
+    const account: ProviderAccount = {
+        id: accountId,
+        provider: "codex",
+        email,
+        accessToken: tokenResponse.accessToken,
+        refreshToken: tokenResponse.refreshToken,
+        expiresAt: tokenResponse.expiresIn ? Date.now() + tokenResponse.expiresIn * 1000 : undefined,
+        label: email || "Codex Account",
+        authSource: "codex-cli",
+    }
+
+    authStore.saveAccount(account)
+    try {
+        saveCodexProxyAuthFile(account, tokenResponse.idToken)
+    } catch (error) {
+        consola.warn("Codex proxy auth save failed:", error)
+    }
+    return account
+}
+
 async function exchangeCodexCode(code: string, redirectUri: string, codeVerifier?: string): Promise<CodexTokens> {
     const params = new URLSearchParams({
         grant_type: "authorization_code",
