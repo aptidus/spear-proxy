@@ -49,24 +49,46 @@ type ProviderUsage = {
     }
 }
 
-function normalizeOfficialModelId(model: string): string {
+// Parse @provider suffix from model ID (e.g., "claude-sonnet-4-5@anthropic" → { model: "claude-sonnet-4-5", providerHint: "anthropic" })
+function parseProviderHint(model: string): { model: string; providerHint?: AuthProvider } {
+    const atIndex = model.lastIndexOf("@")
+    if (atIndex > 0) {
+        const hint = model.substring(atIndex + 1)
+        const validProviders = new Set(["antigravity", "codex", "copilot", "anthropic"])
+        if (validProviders.has(hint)) {
+            return { model: model.substring(0, atIndex), providerHint: hint as AuthProvider }
+        }
+    }
+    return { model }
+}
+
+function normalizeOfficialModelId(model: string, providerHint?: AuthProvider): string {
     const normalized = model?.trim()
     if (!normalized) return model
-    const map: Record<string, string> = {
+
+    // Dot → dash normalization (always applied)
+    const dotMap: Record<string, string> = {
         "claude-sonnet-4.5": "claude-sonnet-4-5",
         "claude-sonnet-4.5-thinking": "claude-sonnet-4-5-thinking",
         "claude-opus-4.5-thinking": "claude-opus-4-5-thinking",
         "claude-sonnet-4.6": "claude-sonnet-4-6",
         "claude-sonnet-4.6-thinking": "claude-sonnet-4-6-thinking",
         "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
-        // Non-thinking aliases → route to thinking variants
+        "gemini-3.1-pro-high": "gemini-3-1-pro-high",
+    }
+    const afterDot = dotMap[normalized] || normalized
+
+    // Non-thinking → thinking aliases (only for antigravity, skip for anthropic/others)
+    if (providerHint && providerHint !== "antigravity") {
+        return afterDot
+    }
+    const thinkingMap: Record<string, string> = {
         "claude-opus-4-6": "claude-opus-4-6-thinking",
         "claude-opus-4-5": "claude-opus-4-5-thinking",
         "claude-sonnet-4-6": "claude-sonnet-4-6-thinking",
         "claude-sonnet-4-5": "claude-sonnet-4-5-thinking",
-        "gemini-3.1-pro-high": "gemini-3-1-pro-high",
     }
-    return map[normalized] || normalized
+    return thinkingMap[afterDot] || afterDot
 }
 
 function isEntryUsable(entry: RoutingEntry): boolean {
@@ -771,18 +793,25 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
 }
 
 export async function createRoutedCompletion(request: RoutedRequest) {
-    const normalizedModel = normalizeOfficialModelId(request.model)
+    // Parse @provider hint (e.g., "claude-sonnet-4-5@anthropic")
+    const { model: rawModel, providerHint } = parseProviderHint(request.model)
+    const normalizedModel = normalizeOfficialModelId(rawModel, providerHint)
     if (isHiddenCodexModel(normalizedModel)) {
         throw new RoutingError("Model is not available", 400)
     }
     const config = loadRoutingConfig()
     const normalizedRequest = { ...request, model: normalizedModel }
     const activeFlow = resolveActiveFlowSelection(config)
-    if (activeFlow) {
+    if (activeFlow && !providerHint) {
         return createFlowCompletionWithEntries(normalizedRequest, activeFlow.entries, activeFlow.flowKey)
     }
     if (isOfficialModel(normalizedModel)) {
-        const accountEntries = resolveAccountEntries(config, normalizedModel)
+        let accountEntries = resolveAccountEntries(config, normalizedModel)
+        // If provider hint specified, filter entries to that provider only
+        if (providerHint) {
+            const filtered = accountEntries.filter(e => e.provider === providerHint)
+            if (filtered.length > 0) accountEntries = filtered
+        }
         return createAccountCompletionWithEntries(normalizedRequest, accountEntries)
     }
 
@@ -1164,19 +1193,26 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
 }
 
 export async function* createRoutedCompletionStream(request: RoutedRequest): AsyncGenerator<string, void, unknown> {
-    const normalizedModel = normalizeOfficialModelId(request.model)
+    // Parse @provider hint (e.g., "claude-sonnet-4-5@anthropic")
+    const { model: rawModel, providerHint } = parseProviderHint(request.model)
+    const normalizedModel = normalizeOfficialModelId(rawModel, providerHint)
     if (isHiddenCodexModel(normalizedModel)) {
         throw new RoutingError("Model is not available", 400)
     }
     const config = loadRoutingConfig()
     const activeFlow = resolveActiveFlowSelection(config)
-    if (activeFlow) {
+    if (activeFlow && !providerHint) {
         yield* createFlowCompletionStreamWithEntries(request, activeFlow.entries, activeFlow.flowKey)
         return
     }
 
     if (isOfficialModel(normalizedModel)) {
-        const accountEntries = resolveAccountEntries(config, normalizedModel)
+        let accountEntries = resolveAccountEntries(config, normalizedModel)
+        // If provider hint specified, filter entries to that provider only
+        if (providerHint) {
+            const filtered = accountEntries.filter(e => e.provider === providerHint)
+            if (filtered.length > 0) accountEntries = filtered
+        }
         const normalizedRequest = { ...request, model: normalizedModel }
         yield* createAccountCompletionStreamWithEntries(normalizedRequest, accountEntries)
         return

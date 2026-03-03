@@ -317,6 +317,9 @@ server.route("/v1beta/messages", messageRoutes)
 server.route("/messages", messageRoutes)
 
 // 模型列表处理函数 - 兼容 OpenAI 和 Anthropic 格式
+// Lists ALL models from ALL configured providers (no dedup).
+// Overlapping models get provider-suffixed IDs (e.g., "claude-sonnet-4-5@anthropic")
+// so clients can target a specific provider for testing.
 const modelsHandler = (c: any) => {
     const now = new Date().toISOString()
     const routingConfig = loadRoutingConfig()
@@ -325,27 +328,50 @@ const modelsHandler = (c: any) => {
         name: `Route: ${flow.name}`,
         owned_by: "routing",
     }))
-    const seen = new Set<string>()
-    const hasAntigravityAccounts = accountManager.count() > 0
-    const baseModels = hasAntigravityAccounts ? AVAILABLE_MODELS : []
 
-    // Include models from all configured providers (anthropic, codex, copilot)
-    const providerModels: Array<{ id: string; name: string; owned_by?: string }> = []
+    // Collect all models per provider
+    type ModelEntry = { id: string; name: string; provider: string }
+    const allModels: ModelEntry[] = []
+
+    // Antigravity models
+    const hasAntigravityAccounts = accountManager.count() > 0
+    if (hasAntigravityAccounts) {
+        for (const m of AVAILABLE_MODELS) {
+            allModels.push({ id: m.id, name: m.name || m.id, provider: "antigravity" })
+        }
+    }
+
+    // Other providers (anthropic, codex, copilot)
     for (const provider of ["anthropic", "codex", "copilot"] as const) {
         const accounts = authStore.listAccounts(provider)
         if (accounts.length > 0) {
             const pModels = getProviderModels(provider)
             for (const m of pModels) {
-                providerModels.push({ id: m.id, name: m.label || m.id, owned_by: provider })
+                allModels.push({ id: m.id, name: m.label || m.id, provider })
             }
         }
     }
 
-    const models = [...baseModels, ...providerModels, ...routeModels].filter(model => {
-        if (seen.has(model.id)) return false
-        seen.add(model.id)
-        return true
+    // Find which model IDs appear in multiple providers (overlapping)
+    const providersByModel = new Map<string, string[]>()
+    for (const m of allModels) {
+        if (!providersByModel.has(m.id)) providersByModel.set(m.id, [])
+        providersByModel.get(m.id)!.push(m.provider)
+    }
+
+    // Build final list: suffix with @provider for overlapping models
+    const models = allModels.map(m => {
+        const providers = providersByModel.get(m.id) || []
+        const isOverlapping = providers.length > 1
+        const suffixedId = isOverlapping ? `${m.id}@${m.provider}` : m.id
+        const displayName = `${m.name} [${m.provider}]`
+        return { id: suffixedId, name: displayName, owned_by: m.provider }
     })
+
+    // Add flow routing models at the end
+    for (const rm of routeModels) {
+        models.push(rm)
+    }
 
     return c.json({
         object: "list",
@@ -355,8 +381,8 @@ const modelsHandler = (c: any) => {
             object: "model",         // OpenAI format
             created_at: now,         // Anthropic format (RFC 3339)
             created: Date.now(),     // OpenAI format (unix timestamp)
-            owned_by: "owned_by" in m ? (m.owned_by as string) : "antigravity",
-            display_name: "name" in m ? (m.name as string) : m.id,
+            owned_by: m.owned_by || "unknown",
+            display_name: m.name || m.id,
         })),
         has_more: false,
         first_id: models[0]?.id,
