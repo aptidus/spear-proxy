@@ -727,27 +727,8 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                 }
             }
 
-            // Try to fetch real usage data from claude.ai internal API
+            // Check token validity via models endpoint
             const proxyUrl = process.env.RELAY_PROXY_URL
-            const orgId = account.organizationId || "65d81213-561a-4897-8490-98537e3c7bdb"
-            const usageBars = await fetchClaudeUsage(account, orgId, proxyUrl)
-            if (usageBars) {
-                updateQuotaCache({
-                    provider: "anthropic",
-                    accountId: account.id,
-                    displayName: account.email || account.id,
-                    bars: usageBars,
-                    updatedAt: new Date().toISOString(),
-                })
-                return {
-                    provider: "anthropic" as const,
-                    accountId: account.id,
-                    displayName: account.email || account.id,
-                    bars: usageBars,
-                }
-            }
-
-            // Fallback: check token validity via models endpoint
             const fetchOptions: any = {
                 headers: {
                     "Authorization": `Bearer ${account.accessToken}`,
