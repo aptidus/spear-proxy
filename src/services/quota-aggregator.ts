@@ -640,8 +640,9 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                 }
             }
 
-            // Fallback: check token validity if no usage data yet
-            const response = await fetch("https://api.anthropic.com/v1/models", {
+            // Fallback: check token validity AND capture any rate limit headers
+            const proxyUrl = process.env.RELAY_PROXY_URL
+            const fetchOptions: any = {
                 headers: {
                     "Authorization": `Bearer ${account.accessToken}`,
                     "anthropic-version": "2023-06-01",
@@ -649,8 +650,79 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                     "user-agent": "claude-cli/2.1.2 (external, cli)",
                     "x-app": "cli",
                 },
-            })
+            }
+            if (proxyUrl) {
+                fetchOptions.proxy = proxyUrl
+            }
+            const response = await fetch("https://api.anthropic.com/v1/models", fetchOptions)
 
+            // Log all response headers for debugging (helps determine what Anthropic Max returns)
+            const headerMap: Record<string, string> = {}
+            response.headers.forEach((value: string, key: string) => {
+                headerMap[key] = value
+            })
+            consola.info(`[anthropic] Models check for ${account.id}: ${response.status}, headers:`, JSON.stringify(headerMap))
+
+            // Check if rate limit headers are present
+            const reqLimit = response.headers.get("anthropic-ratelimit-requests-limit")
+            const tokLimit = response.headers.get("anthropic-ratelimit-tokens-limit")
+
+            if (reqLimit || tokLimit) {
+                // Anthropic returns rate limit headers! Cache them and use for display
+                const reqRemaining = response.headers.get("anthropic-ratelimit-requests-remaining")
+                const reqReset = response.headers.get("anthropic-ratelimit-requests-reset")
+                const tokRemaining = response.headers.get("anthropic-ratelimit-tokens-remaining")
+                const tokReset = response.headers.get("anthropic-ratelimit-tokens-reset")
+
+                const rlData = {
+                    requestsLimit: parseInt(reqLimit || "0", 10),
+                    requestsRemaining: parseInt(reqRemaining || "0", 10),
+                    requestsReset: reqReset || "",
+                    tokensLimit: parseInt(tokLimit || "0", 10),
+                    tokensRemaining: parseInt(tokRemaining || "0", 10),
+                    tokensReset: tokReset || "",
+                    updatedAt: new Date().toISOString(),
+                }
+                // Log for debugging
+                consola.info(`[anthropic] Rate limits from models check: req ${rlData.requestsRemaining}/${rlData.requestsLimit}, tok ${rlData.tokensRemaining}/${rlData.tokensLimit}`)
+
+                const reqPercent = rlData.requestsLimit > 0
+                    ? Math.round((rlData.requestsRemaining / rlData.requestsLimit) * 100) : 0
+                const tokPercent = rlData.tokensLimit > 0
+                    ? Math.round((rlData.tokensRemaining / rlData.tokensLimit) * 100) : 0
+
+                const bars: AccountBar[] = [
+                    {
+                        key: "requests",
+                        label: `req ${rlData.requestsRemaining}/${rlData.requestsLimit}`,
+                        percentage: reqPercent,
+                        resetTime: rlData.requestsReset || undefined,
+                    },
+                    {
+                        key: "tokens",
+                        label: `tok ${Math.round(rlData.tokensRemaining / 1000)}k/${Math.round(rlData.tokensLimit / 1000)}k`,
+                        percentage: tokPercent,
+                        resetTime: rlData.tokensReset || undefined,
+                    },
+                ]
+
+                updateQuotaCache({
+                    provider: "anthropic",
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars,
+                    updatedAt: rlData.updatedAt,
+                })
+
+                return {
+                    provider: "anthropic" as const,
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars,
+                }
+            }
+
+            // No rate limit headers — show token status
             const isValid = response.ok
             const bar: AccountBar = {
                 key: "status",
