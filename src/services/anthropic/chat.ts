@@ -15,6 +15,16 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 const ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
 const CLAUDE_CODE_VERSION = "2.1.2"
 
+/** Proxy-aware fetch — routes through residential relay if RELAY_PROXY_URL is set */
+function proxyFetch(url: string, options: RequestInit): Promise<Response> {
+    const fetchOptions: any = { ...options }
+    const proxyUrl = process.env.RELAY_PROXY_URL
+    if (proxyUrl) {
+        fetchOptions.proxy = proxyUrl
+    }
+    return fetch(url, fetchOptions)
+}
+
 // Rate limit data captured from Anthropic API response headers
 export interface AnthropicRateLimitData {
     requestsLimit: number
@@ -274,7 +284,7 @@ async function fetchAndCacheModels(accessToken: string): Promise<void> {
 
     modelFetchPromise = (async () => {
         try {
-            const response = await fetch(ANTHROPIC_MODELS_URL, {
+            const response = await proxyFetch(ANTHROPIC_MODELS_URL, {
                 headers: {
                     "Authorization": `Bearer ${accessToken}`,
                     "anthropic-version": "2023-06-01",
@@ -411,7 +421,7 @@ export async function createAnthropicCompletion(
         requestBody.max_tokens = Math.max(requestBody.max_tokens, budgetTokens + 1024)
     }
 
-    const response = await fetch(ANTHROPIC_API_URL, {
+    const response = await proxyFetch(ANTHROPIC_API_URL, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -478,7 +488,7 @@ export async function createAnthropicCompletion(
  */
 export async function fetchAnthropicModels(accessToken: string): Promise<any[]> {
     try {
-        const response = await fetch(ANTHROPIC_MODELS_URL, {
+        const response = await proxyFetch(ANTHROPIC_MODELS_URL, {
             headers: {
                 "Authorization": `Bearer ${accessToken}`,
                 "anthropic-version": "2023-06-01",

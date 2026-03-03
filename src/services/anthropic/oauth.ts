@@ -14,6 +14,16 @@ const TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 const REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
 const SCOPES = "org:create_api_key user:profile user:inference"
 
+/** Proxy-aware fetch — routes through residential relay if RELAY_PROXY_URL is set */
+function proxyFetch(url: string, options: RequestInit): Promise<Response> {
+    const fetchOptions: any = { ...options }
+    const proxyUrl = process.env.RELAY_PROXY_URL
+    if (proxyUrl) {
+        fetchOptions.proxy = proxyUrl
+    }
+    return fetch(url, fetchOptions)
+}
+
 export interface AnthropicAuthSession {
     id: string
     state: string
@@ -83,7 +93,7 @@ export async function completeAnthropicOAuth(
         const code = parts[0]
         const state = parts[1]
 
-        const tokenResponse = await fetch(TOKEN_URL, {
+        const tokenResponse = await proxyFetch(TOKEN_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -148,7 +158,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<{
     refreshToken: string
     expiresIn: number
 }> {
-    const response = await fetch(TOKEN_URL, {
+    const response = await proxyFetch(TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -739,6 +739,10 @@
                     Antigravity
                 </button>
                 <button class="w-full text-left px-4 py-3 rounded-lg border border-[#2f253f] hover:border-gray-500"
+                    onclick="startProviderLogin('anthropic')">
+                    Anthropic Max
+                </button>
+                <button class="w-full text-left px-4 py-3 rounded-lg border border-[#2f253f] hover:border-gray-500"
                     onclick="startProviderLogin('codex')">
                     Codex
                 </button>
@@ -1719,7 +1723,7 @@
 
         function sortQuotaAccounts(accounts) {
             if (!window._optimizeQuotaSort) return accounts;
-            const providerOrder = ['antigravity', 'codex', 'copilot'];
+            const providerOrder = ['antigravity', 'anthropic', 'codex', 'copilot'];
             const sorted = [];
             const unknown = [];
 
@@ -2043,6 +2047,28 @@
                         </div>
                     `;
                     return;
+                } else if (provider === 'anthropic' && data.auth_url) {
+                    // Anthropic OAuth: open claude.ai auth, then ask user to paste code
+                    window.open(data.auth_url, '_blank');
+                    setAddAccountStatus('');
+                    const statusEl = document.getElementById('add-account-status');
+                    statusEl.classList.remove('hidden');
+                    statusEl.innerHTML = `
+                        <div style="text-align:left;font-size:13px;line-height:1.6">
+                            <p style="margin-bottom:8px"><strong>Steps:</strong></p>
+                            <p>1. Sign in to Claude in the new tab</p>
+                            <p>2. Authorize the Claude Code application</p>
+                            <p>3. Copy the <strong>authorization code</strong> shown on the page</p>
+                            <p style="margin-top:8px">Paste the code here (format: code#state):</p>
+                            <input id="anthropic-auth-code" type="text" placeholder="code#state" 
+                                style="width:100%;padding:8px 12px;margin-top:6px;background:#1a1a2e;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;outline:none" />
+                            <button onclick="submitAnthropicCode('${data.session_id}')" 
+                                style="width:100%;margin-top:8px;padding:8px;background:#d4a5ff;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer">
+                                Authenticate
+                            </button>
+                        </div>
+                    `;
+                    return;
                 } else {
                     setAddAccountStatus(`Connected: ${data.email || data.id || provider}`);
                     closeAddAccountModal();
@@ -2071,6 +2097,35 @@
                 const data = await response.json();
                 if (data.success) {
                     setAddAccountStatus(`✓ Connected: ${data.email}`);
+                    setTimeout(() => {
+                        closeAddAccountModal();
+                        refreshAll(true);
+                    }, 1000);
+                } else {
+                    setAddAccountStatus(`Error: ${data.error || 'Authentication failed'}`);
+                }
+            } catch (error) {
+                setAddAccountStatus(`Error: ${error.message}`);
+            }
+        }
+
+        async function submitAnthropicCode(sessionId) {
+            const input = document.getElementById('anthropic-auth-code');
+            const authCode = input?.value?.trim();
+            if (!authCode) {
+                setAddAccountStatus('Please paste the authorization code');
+                return;
+            }
+            setAddAccountStatus('Authenticating...');
+            try {
+                const response = await fetch(`${API_BASE}/auth/anthropic/exchange`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId, auth_code: authCode })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    setAddAccountStatus(`✓ Connected: ${data.email || 'Anthropic'}`);
                     setTimeout(() => {
                         closeAddAccountModal();
                         refreshAll(true);
