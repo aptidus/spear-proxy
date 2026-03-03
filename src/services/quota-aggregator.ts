@@ -8,7 +8,7 @@ import { fetchAntigravityModels as fetchAntigravityModelsRequest, type Antigravi
 import { refreshCodexAccessToken, refreshCodexAccountIfNeeded } from "~/services/codex/oauth"
 import { accountManager } from "~/services/antigravity/account-manager"
 import type { ProviderAccount } from "~/services/auth/types"
-import { getAnthropicRateLimits } from "~/services/anthropic/chat"
+import { getAnthropicRateLimits, getAnthropicUsageTracking } from "~/services/anthropic/chat"
 import { UpstreamError } from "~/lib/error"
 import { getDataDir } from "~/lib/data-dir"
 
@@ -600,7 +600,47 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                 }
             }
 
-            // Fallback: check token validity if no rate limit data yet
+            // Check local usage tracking (subscription accounts without rate limit headers)
+            const usageData = getAnthropicUsageTracking(account.id)
+            if (usageData && usageData.requestCount > 0) {
+                const windowStartMs = new Date(usageData.windowStart).getTime()
+                const elapsedMs = Date.now() - windowStartMs
+                const remainingMs = Math.max(0, 5 * 60 * 60 * 1000 - elapsedMs)
+                const remainingMin = Math.round(remainingMs / 60000)
+                const remainingHrs = Math.floor(remainingMin / 60)
+                const remainingMins = remainingMin % 60
+                const timeLabel = remainingHrs > 0 ? `${remainingHrs}h${remainingMins}m` : `${remainingMins}m`
+
+                const totalTokens = usageData.inputTokens + usageData.outputTokens
+                const tokenLabel = totalTokens >= 1000000
+                    ? `${(totalTokens / 1000000).toFixed(1)}M`
+                    : totalTokens >= 1000 ? `${Math.round(totalTokens / 1000)}k` : `${totalTokens}`
+
+                const bars: AccountBar[] = [
+                    {
+                        key: "5h",
+                        label: `${usageData.requestCount} req, ${tokenLabel} tok (${timeLabel} left)`,
+                        percentage: 100,  // No known limit for subscription
+                    },
+                ]
+
+                updateQuotaCache({
+                    provider: "anthropic",
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars,
+                    updatedAt: usageData.updatedAt,
+                })
+
+                return {
+                    provider: "anthropic" as const,
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars,
+                }
+            }
+
+            // Fallback: check token validity if no usage data yet
             const response = await fetch("https://api.anthropic.com/v1/models", {
                 headers: {
                     "Authorization": `Bearer ${account.accessToken}`,

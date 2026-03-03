@@ -26,35 +26,57 @@ export interface AnthropicRateLimitData {
     updatedAt: string
 }
 
+// Local usage tracking for subscription accounts (no rate limit headers)
+export interface AnthropicUsageData {
+    requestCount: number
+    inputTokens: number
+    outputTokens: number
+    windowStart: string  // ISO timestamp — rolling 5h window
+    updatedAt: string
+}
+
 const rateLimitCache = new Map<string, AnthropicRateLimitData>()
+const usageTrackingCache = new Map<string, AnthropicUsageData>()
+
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
 
 /** Get cached rate limit data for an Anthropic account */
 export function getAnthropicRateLimits(accountId: string): AnthropicRateLimitData | null {
     return rateLimitCache.get(accountId) || null
 }
 
+/** Get local usage tracking data for an Anthropic account */
+export function getAnthropicUsageTracking(accountId: string): AnthropicUsageData | null {
+    const data = usageTrackingCache.get(accountId)
+    if (!data) return null
+
+    // Reset if 5h window expired
+    const windowStart = new Date(data.windowStart).getTime()
+    if (Date.now() - windowStart > FIVE_HOURS_MS) {
+        const reset: AnthropicUsageData = {
+            requestCount: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            windowStart: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        }
+        usageTrackingCache.set(accountId, reset)
+        return reset
+    }
+    return data
+}
+
 function captureRateLimitHeaders(accountId: string, response: Response): void {
     const reqLimit = response.headers.get("anthropic-ratelimit-requests-limit")
-    const reqRemaining = response.headers.get("anthropic-ratelimit-requests-remaining")
-    const reqReset = response.headers.get("anthropic-ratelimit-requests-reset")
     const tokLimit = response.headers.get("anthropic-ratelimit-tokens-limit")
-    const tokRemaining = response.headers.get("anthropic-ratelimit-tokens-remaining")
-    const tokReset = response.headers.get("anthropic-ratelimit-tokens-reset")
-
-    // Log all anthropic-related headers for debugging
-    const allHeaders: string[] = []
-    response.headers.forEach((value, key) => {
-        if (key.startsWith("anthropic") || key.startsWith("x-ratelimit") || key.includes("ratelimit") || key.includes("retry")) {
-            allHeaders.push(`${key}: ${value}`)
-        }
-    })
-    if (allHeaders.length > 0) {
-        consola.info(`[anthropic] Rate limit headers for ${accountId}: ${allHeaders.join(", ")}`)
-    } else {
-        consola.info(`[anthropic] No rate limit headers found for ${accountId}`)
-    }
 
     if (reqLimit || tokLimit) {
+        // Real rate limit headers available (API key access)
+        const reqRemaining = response.headers.get("anthropic-ratelimit-requests-remaining")
+        const reqReset = response.headers.get("anthropic-ratelimit-requests-reset")
+        const tokRemaining = response.headers.get("anthropic-ratelimit-tokens-remaining")
+        const tokReset = response.headers.get("anthropic-ratelimit-tokens-reset")
+
         const data = {
             requestsLimit: parseInt(reqLimit || "0", 10),
             requestsRemaining: parseInt(reqRemaining || "0", 10),
@@ -65,8 +87,32 @@ function captureRateLimitHeaders(accountId: string, response: Response): void {
             updatedAt: new Date().toISOString(),
         }
         rateLimitCache.set(accountId, data)
-        consola.info(`[anthropic] Cached rate limits: req ${data.requestsRemaining}/${data.requestsLimit}, tok ${data.tokensRemaining}/${data.tokensLimit}`)
+        consola.info(`[anthropic] Rate limits: req ${data.requestsRemaining}/${data.requestsLimit}, tok ${data.tokensRemaining}/${data.tokensLimit}`)
     }
+}
+
+/** Track usage from the API response body (for subscription accounts) */
+function trackUsageFromResponse(accountId: string, usage: { input_tokens?: number; output_tokens?: number }): void {
+    let current = usageTrackingCache.get(accountId)
+
+    // Initialize or reset if 5h window expired
+    if (!current || (Date.now() - new Date(current.windowStart).getTime()) > FIVE_HOURS_MS) {
+        current = {
+            requestCount: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            windowStart: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        }
+    }
+
+    current.requestCount++
+    current.inputTokens += usage.input_tokens || 0
+    current.outputTokens += usage.output_tokens || 0
+    current.updatedAt = new Date().toISOString()
+    usageTrackingCache.set(accountId, current)
+
+    consola.debug(`[anthropic] Usage for ${accountId}: ${current.requestCount} requests, ${current.inputTokens} in / ${current.outputTokens} out tokens (5h window)`)
 }
 
 // Token refresh lock to prevent concurrent refreshes
@@ -390,6 +436,11 @@ export async function createAnthropicCompletion(
 
     // Capture rate limit headers from Anthropic response (real-time quota tracking)
     captureRateLimitHeaders(account.id, response)
+
+    // Track usage from response body (cumulative in 5h window)
+    if (data.usage) {
+        trackUsageFromResponse(account.id, data.usage)
+    }
 
     // Convert Anthropic response to internal ContentBlock format
     const contentBlocks: ContentBlock[] = []
