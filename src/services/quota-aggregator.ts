@@ -556,12 +556,34 @@ function isAuthError(error: unknown): boolean {
     return false
 }
 
+// Cache for usage API failures to prevent 401 spam
+const usageApiFailureCache = new Map<string, number>() // accountId -> timestamp of last failure
+const USAGE_API_RETRY_MS = 30 * 60 * 1000 // 30 minutes between retries on failure
+
+async function fetchClaudeUsageRateLimited(account: ProviderAccount, orgId: string, proxyUrl?: string): Promise<AccountBar[] | null> {
+    const lastFailure = usageApiFailureCache.get(account.id)
+    if (lastFailure && (Date.now() - lastFailure) < USAGE_API_RETRY_MS) {
+        return null // Skip — recently failed, don't retry yet
+    }
+
+    const result = await fetchClaudeUsage(account, orgId, proxyUrl)
+    if (!result) {
+        usageApiFailureCache.set(account.id, Date.now())
+    } else {
+        usageApiFailureCache.delete(account.id) // Clear failure cache on success
+    }
+    return result
+}
+
 async function fetchClaudeUsage(account: ProviderAccount, orgId: string, proxyUrl?: string): Promise<AccountBar[] | null> {
     // Try multiple candidate endpoints for the claude.ai usage API
     const endpoints = [
         `https://claude.ai/api/organizations/${orgId}/rate_limit_usage`,
         `https://claude.ai/api/organizations/${orgId}/usage`,
         `https://api.anthropic.com/v1/organizations/${orgId}/rate_limit_usage`,
+        `https://console.anthropic.com/v1/organizations/${orgId}/rate_limit_usage`,
+        `https://console.anthropic.com/api/organizations/${orgId}/usage`,
+        `https://api.anthropic.com/v1/rate_limit_usage`,
     ]
 
     for (const url of endpoints) {
@@ -588,47 +610,16 @@ async function fetchClaudeUsage(account: ProviderAccount, orgId: string, proxyUr
             if (res.ok && bodyText) {
                 try {
                     const data = JSON.parse(bodyText)
-                    consola.info(`[anthropic] Usage data parsed:`, JSON.stringify(data).substring(0, 500))
+                    consola.info(`[anthropic] Usage data keys:`, Object.keys(data).join(", "))
 
-                    // Try to extract usage bars from the response
-                    // The exact format depends on what Anthropic returns
-                    if (data.usage || data.rate_limits || data.limits) {
-                        const usageData = data.usage || data.rate_limits || data.limits || data
-                        const bars: AccountBar[] = []
-
-                        // Generic extraction: look for percentage/used/limit fields
-                        if (Array.isArray(usageData)) {
-                            for (const item of usageData) {
-                                const pct = item.percentage_used ?? item.percent_used ?? item.usage_percent ?? null
-                                bars.push({
-                                    key: item.name || item.type || item.model || "usage",
-                                    label: `${item.name || item.type || "usage"}: ${pct !== null ? pct + "%" : "active"}`,
-                                    percentage: pct !== null ? Math.round(100 - pct) : 100,
-                                    resetTime: item.resets_at || item.reset_time || undefined,
-                                })
-                            }
-                        } else if (typeof usageData === "object") {
-                            for (const [key, val] of Object.entries(usageData)) {
-                                if (typeof val === "object" && val !== null) {
-                                    const v = val as any
-                                    const pct = v.percentage_used ?? v.percent_used ?? null
-                                    bars.push({
-                                        key,
-                                        label: `${key}: ${pct !== null ? pct + "%" : "active"}`,
-                                        percentage: pct !== null ? Math.round(100 - pct) : 100,
-                                        resetTime: v.resets_at || v.reset_time || undefined,
-                                    })
-                                }
-                            }
-                        }
-
-                        if (bars.length > 0) {
-                            return bars
-                        }
+                    // Try to extract usage bars from any response format
+                    const bars = parseUsageResponse(data)
+                    if (bars && bars.length > 0) {
+                        consola.success(`[anthropic] Got usage data from ${url}: ${bars.length} bars`)
+                        return bars
                     }
 
-                    // If we got a 200 but can't parse usage, log it and continue
-                    consola.info(`[anthropic] Got 200 from ${url} but couldn't parse usage bars from response`)
+                    consola.info(`[anthropic] Got 200 from ${url} but couldn't parse usage bars`)
                 } catch (parseErr) {
                     consola.warn(`[anthropic] Failed to parse usage response from ${url}:`, parseErr)
                 }
@@ -639,6 +630,44 @@ async function fetchClaudeUsage(account: ProviderAccount, orgId: string, proxyUr
     }
 
     return null
+}
+
+function parseUsageResponse(data: any): AccountBar[] | null {
+    const bars: AccountBar[] = []
+
+    // Handle various possible response formats
+    const usageData = data.usage || data.rate_limits || data.limits || data.data || data
+
+    if (Array.isArray(usageData)) {
+        for (const item of usageData) {
+            const pct = item.percentage_used ?? item.percent_used ?? item.usage_percent ?? null
+            const remaining = pct !== null ? Math.round(100 - pct) : 100
+            bars.push({
+                key: item.name || item.type || item.model || "usage",
+                label: `${item.name || item.type || "usage"}: ${pct !== null ? pct + "%" : "active"}`,
+                percentage: remaining,
+                resetTime: item.resets_at || item.reset_time || undefined,
+            })
+        }
+    } else if (typeof usageData === "object" && usageData !== null) {
+        for (const [key, val] of Object.entries(usageData)) {
+            if (typeof val === "object" && val !== null) {
+                const v = val as any
+                const pct = v.percentage_used ?? v.percent_used ?? v.usage ?? null
+                if (pct !== null || v.limit || v.used || v.remaining) {
+                    const remaining = pct !== null ? Math.round(100 - pct) : 100
+                    bars.push({
+                        key,
+                        label: `${key}: ${pct !== null ? pct + "% used" : "active"}`,
+                        percentage: remaining,
+                        resetTime: v.resets_at || v.reset_time || v.reset || undefined,
+                    })
+                }
+            }
+        }
+    }
+
+    return bars.length > 0 ? bars : null
 }
 
 async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<AccountQuotaView[]> {
@@ -727,8 +756,27 @@ async function fetchAnthropicQuotas(accounts: ProviderAccount[]): Promise<Accoun
                 }
             }
 
-            // Check token validity via models endpoint
+            // Try real usage API (rate-limited to avoid spam)
             const proxyUrl = process.env.RELAY_PROXY_URL
+            const orgId = account.organizationId || "65d81213-561a-4897-8490-98537e3c7bdb"
+            const usageBars = await fetchClaudeUsageRateLimited(account, orgId, proxyUrl)
+            if (usageBars) {
+                updateQuotaCache({
+                    provider: "anthropic",
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars: usageBars,
+                    updatedAt: new Date().toISOString(),
+                })
+                return {
+                    provider: "anthropic" as const,
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars: usageBars,
+                }
+            }
+
+            // Fallback: check token validity via models endpoint
             const fetchOptions: any = {
                 headers: {
                     "Authorization": `Bearer ${account.accessToken}`,
