@@ -836,14 +836,18 @@ export async function createRoutedCompletion(request: RoutedRequest) {
         return createAccountCompletionWithEntries(normalizedRequest, accountEntries)
     }
 
-    const flowSelection = resolveFlowSelection(config, normalizedModel)
-    let flowEntries = flowSelection.entries
-    // If provider hint specified, filter flow entries to that provider only
+    const flowKey = getFlowKey(normalizedModel)
+    let rawEntries = selectFlowEntries(config, normalizedModel)
+    // Filter by provider BEFORE normalizeEntries (which may remove entries by account status)
     if (providerHint) {
-        const filtered = flowEntries.filter(e => e.provider === providerHint)
-        if (filtered.length > 0) flowEntries = filtered
+        const filtered = rawEntries.filter(e => e.provider === providerHint)
+        if (filtered.length > 0) rawEntries = filtered
     }
-    return createFlowCompletionWithEntries(normalizedRequest, flowEntries, flowSelection.flowKey)
+    const flowEntries = normalizeEntries(rawEntries)
+    if (flowEntries.length === 0) {
+        throw new RoutingError(`No usable entries for model "${normalizedModel}" with provider "${providerHint || "any"}"`, 400)
+    }
+    return createFlowCompletionWithEntries(normalizedRequest, flowEntries, flowKey)
 }
 
 async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, entries: RoutingEntry[], flowKey?: string): AsyncGenerator<string, void, unknown> {
@@ -1255,12 +1259,16 @@ export async function* createRoutedCompletionStream(request: RoutedRequest): Asy
     }
 
     const normalizedRequest = { ...request, model: normalizedModel }
-    const flowSelection = resolveFlowSelection(config, normalizedModel)
-    let flowEntries = flowSelection.entries
-    // If provider hint specified, filter flow entries to that provider only
+    const flowKey = getFlowKey(normalizedModel)
+    let rawEntries = selectFlowEntries(config, normalizedModel)
+    // Filter by provider BEFORE normalizeEntries (which may remove entries by account status)
     if (providerHint) {
-        const filtered = flowEntries.filter(e => e.provider === providerHint)
-        if (filtered.length > 0) flowEntries = filtered
+        const filtered = rawEntries.filter(e => e.provider === providerHint)
+        if (filtered.length > 0) rawEntries = filtered
     }
-    yield* createFlowCompletionStreamWithEntries(normalizedRequest, flowEntries, flowSelection.flowKey)
+    const flowEntries = normalizeEntries(rawEntries)
+    if (flowEntries.length === 0) {
+        throw new RoutingError(`No usable entries for model "${normalizedModel}" with provider "${providerHint || "any"}"`, 400)
+    }
+    yield* createFlowCompletionStreamWithEntries(normalizedRequest, flowEntries, flowKey)
 }
