@@ -191,6 +191,8 @@ export interface ModelTestResult {
     modelId: string
     upstreamModel?: string
     upstreamProvider?: string
+    upstreamAccount?: string
+    routeTag?: string
     agentic: boolean
     toolCall: boolean
     thinking: boolean
@@ -208,8 +210,12 @@ function getProxyBaseUrl(): string {
 }
 
 /**
- * Call our own /v1/chat/completions endpoint as if we were an agent.
- * This tests the full path: API key auth → routing → upstream → response translation.
+ * Call our own /v1/chat/completions endpoint — simulating the full agent pipeline.
+ * This tests the COMPLETE chain that Spear Agents uses:
+ *   API key auth → flow route resolution → provider/account selection → upstream call → response translation
+ *
+ * The request includes a system prompt, multi-tool spec, and tool_choice=any — identical to how
+ * Spear Agents dispatches agentic tasks through the proxy.
  */
 interface ProxyResponse {
     choices: Array<{
@@ -222,8 +228,11 @@ interface ProxyResponse {
     }>
     usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
     // Routing metadata from response headers
-    _upstream?: { model?: string; provider?: string; routeTag?: string }
+    _upstream?: { model?: string; provider?: string; routeTag?: string; account?: string }
 }
+
+// System prompt matching what Spear Agents sends to its worker agents
+const AGENT_SYSTEM_PROMPT = `You are a software engineering agent. You have access to tools for reading files, writing files, running commands, and searching codebases. Use the appropriate tools to complete the user's request. Always think step by step before acting.`
 
 async function callProxy(params: {
     model: string
@@ -239,8 +248,9 @@ async function callProxy(params: {
         headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${params.apiKey}`,
-            // Mimic how Spear Agents calls us
-            "User-Agent": "SpearAgents/1.0 (ping-test)",
+            // Exact same headers Spear Agents uses for agent dispatch
+            "User-Agent": "SpearAgents/1.0 (agent-pipeline-test)",
+            "X-Request-Source": "spear-agents-ping",
         },
         body: JSON.stringify({
             model: params.model,
@@ -260,11 +270,12 @@ async function callProxy(params: {
 
     const json = await resp.json()
 
-    // Extract upstream routing info from response headers
+    // Extract upstream routing info from response headers — confirms full routing chain executed
     json._upstream = {
         model: resp.headers.get("x-upstream-model") || undefined,
         provider: resp.headers.get("x-upstream-provider") || undefined,
         routeTag: resp.headers.get("x-route-tag") || undefined,
+        account: resp.headers.get("x-upstream-account") || undefined,
     }
 
     return json
@@ -312,10 +323,15 @@ export async function testAccountModels(
         const start = Date.now()
 
         try {
-            // Test with tools + tool_choice=any to force tool usage (like real agents)
+            // Full agent pipeline test: system prompt + tools + tool_choice=any
+            // Identical to how Spear Agents dispatches work to upstream models
             const response = await callProxy({
                 model: modelId,
                 messages: [
+                    {
+                        role: "system",
+                        content: AGENT_SYSTEM_PROMPT,
+                    },
                     {
                         role: "user",
                         content: "Read the file at /tmp/test.txt and then search for TODO comments in the /workspace directory. Use the appropriate tools.",
@@ -330,10 +346,13 @@ export async function testAccountModels(
             result.agentic = true
             result.latencyMs = Date.now() - start
 
-            // Capture actual upstream model/provider from response headers
+            // Capture actual upstream routing chain from response headers
+            // This confirms the request went through: auth → flow route → provider selection → upstream
             if (response._upstream) {
                 result.upstreamModel = response._upstream.model
                 result.upstreamProvider = response._upstream.provider
+                result.upstreamAccount = response._upstream.account
+                result.routeTag = response._upstream.routeTag
             }
 
             // Check if model returned tool calls
@@ -341,8 +360,8 @@ export async function testAccountModels(
             const toolCalls = choice?.message?.tool_calls || []
             const hasToolUse = toolCalls.length > 0
 
-            const upstreamInfo = result.upstreamModel ? ` → ${result.upstreamModel} [${result.upstreamProvider || "?"}]` : ""
-            console.log(`[ping] ${modelId}${upstreamInfo}: tool_use=${hasToolUse} tools=${JSON.stringify(toolCalls.map(tc => tc.function?.name))} finish=${choice?.finish_reason}`)
+            const upstreamInfo = result.upstreamModel ? ` → ${result.upstreamModel} [${result.upstreamProvider || "?"}] acct=${result.upstreamAccount || "?"}` : ""
+            console.log(`[ping] ${modelId}${upstreamInfo}: tool_use=${hasToolUse} tools=${JSON.stringify(toolCalls.map(tc => tc.function?.name))} route=${result.routeTag || "?"} finish=${choice?.finish_reason}`)
 
             if (hasToolUse) {
                 result.toolCall = true

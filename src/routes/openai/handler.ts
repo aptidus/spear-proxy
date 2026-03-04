@@ -117,6 +117,7 @@ export async function handleChatCompletion(c: Context): Promise<Response> {
         if (routeCtx.model) c.header("X-Upstream-Model", routeCtx.model)
         if (routeCtx.provider) c.header("X-Upstream-Provider", routeCtx.provider)
         if (routeCtx.routeTag) c.header("X-Route-Tag", routeCtx.routeTag)
+        if (routeCtx.account) c.header("X-Upstream-Account", routeCtx.account)
 
         return c.json({
             id: generateChatId(),

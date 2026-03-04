@@ -14,22 +14,13 @@ import { getDataDir } from "~/lib/data-dir"
 
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
 
-/** Sanitize account label for display — strip emails and internal identifiers */
+/** Return account display name — show actual email/label for clarity */
 function safeDisplayName(account: ProviderAccount): string {
-    const idTail = (account.id || "????").slice(-4)
     const raw = account.label || ""
-    if (!raw) return `Account ${idTail}`
-    // If label looks like an email, mask it
-    if (raw.includes("@")) {
-        const prefix = raw.split("@")[0]
-        const masked = prefix.length > 2 ? `${prefix.slice(0, 2)}***` : "***"
-        return `Account ${masked}`
-    }
-    // If label is an internal identifier like "anthropic-user", replace it
-    if (/^[a-z]+-[a-z]+$/i.test(raw) || raw.toLowerCase().includes("user")) {
-        return `Account ${idTail}`
-    }
-    return raw
+    if (raw) return raw
+    // Fallback: use account id if available
+    if (account.id) return account.id
+    return "Unknown Account"
 }
 
 type ModelInfo = AntigravityModelInfo

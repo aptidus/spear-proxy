@@ -1558,18 +1558,21 @@
                         const thinkIcon = r.thinking ? `<span class="text-emerald-400">${check}</span>` : `<span class="text-gray-600">—</span>`;
                         const latency = (r.latencyMs / 1000).toFixed(1);
                         const errorHtml = r.error ? `<div class="text-[9px] text-red-400 truncate mt-0.5">${r.error}</div>` : '';
-                        // Show flow route name + actual upstream model
+                        // Show flow route → upstream model → account (full routing chain)
                         const shortModel = r.modelId.replace('claude-', '').replace('gemini-', 'g-');
-                        const upstreamInfo = r.upstreamModel ? `<span class="text-blue-400 font-mono truncate max-w-[100px]" title="${r.upstreamModel} [${r.upstreamProvider || '?'}]"> → ${r.upstreamModel.replace('models/', '').replace('claude-', '')}</span>` : '';
+                        const upstreamModel = r.upstreamModel ? r.upstreamModel.replace('models/', '').replace('claude-', '') : '';
+                        const routeChain = r.upstreamModel
+                            ? `<span class="text-blue-400 font-mono truncate" title="Route: ${r.modelId} → ${r.upstreamModel} via ${r.upstreamProvider || '?'} (${r.upstreamAccount || '?'})"> → ${upstreamModel}</span>`
+                            : '';
                         return `
                             <div class="flex items-center justify-between text-[10px] py-1 border-t border-gray-800/50">
-                                <div class="flex items-center gap-1 truncate max-w-[200px]">
+                                <div class="flex items-center gap-1 truncate max-w-[220px]">
                                     <span class="text-gray-400 font-mono truncate" title="${r.modelId}">${shortModel}</span>
-                                    ${upstreamInfo}
+                                    ${routeChain}
                                 </div>
                                 <div class="flex items-center gap-2 text-[10px]">
-                                    <span title="Agentic">${agenticIcon}</span>
-                                    <span title="Tool Call">${toolIcon}</span>
+                                    <span title="Agentic (system prompt + tools)">${agenticIcon}</span>
+                                    <span title="Tool Call (tool_choice=any)">${toolIcon}</span>
                                     <span title="Thinking">${thinkIcon}</span>
                                     <span class="text-gray-500 w-8 text-right">${latency}s</span>
                                 </div>
@@ -1742,9 +1745,12 @@
                 `;
             }).join('');
 
-            // Apply privacy masking based on provider
+            // Show provider label + actual email/username
             const displayName = account.displayName || account.accountId;
-            const maskedName = provider === 'copilot' ? maskUsername(displayName) : maskEmail(displayName);
+            const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
+            const cardTitle = window._privacyMode
+                ? (provider === 'copilot' ? maskUsername(displayName) : maskEmail(displayName))
+                : displayName;
             const providerLogo = getProviderLogo(provider, cardId);
 
             return `
@@ -1753,7 +1759,10 @@
                         <div class="flex items-center justify-between mb-4">
                             <div class="flex items-center gap-2">
                                 ${providerLogo}
-                                <div class="text-sm font-bold text-gray-300">${maskedName}</div>
+                                <div>
+                                    <div class="text-[10px] uppercase tracking-widest text-gray-500">${providerLabel}</div>
+                                    <div class="text-sm font-bold text-gray-300">${cardTitle}</div>
+                                </div>
                             </div>
                             <div class="flex items-center gap-2">
                                 <button onclick="event.stopPropagation(); testAccountModels('${provider}', '${account.accountId}', this)"

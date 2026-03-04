@@ -61,7 +61,7 @@ function toSummary(account: ProviderAccount): ProviderAccountSummary {
     return {
         id: account.id || "",
         provider: account.provider,
-        displayName: account.label || `Account ${(account.id || "????").slice(-4)}`,
+        displayName: account.label || account.id || "Unknown Account",
         label: account.label,
         expiresAt: account.expiresAt,
     }
@@ -95,7 +95,11 @@ routingRouter.get("/config", async (c) => {
         const primaryCopilotAccount = copilotAccounts.find(account => !!account.accessToken)
         if (primaryCopilotAccount) {
             try {
-                const remoteModels = await listCopilotModelsForAccount(primaryCopilotAccount)
+                // Timeout after 5s to prevent /routing/config from hanging if Copilot API is slow
+                const remoteModels = await Promise.race([
+                    listCopilotModelsForAccount(primaryCopilotAccount),
+                    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Copilot models sync timed out (5s)")), 5000)),
+                ])
                 if (remoteModels.length > 0) {
                     const dynamicModels = remoteModels.map(model => ({
                         id: model.id,

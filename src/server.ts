@@ -465,8 +465,7 @@ server.post("/accounts/test-models", async (c) => {
         body = {}
     }
 
-    // provider/accountId are accepted for backward compat but ignored —
-    // we now test all flow routes through the proxy's own HTTP endpoint
+    // provider/accountId are used to filter which flow routes to test
     const provider = (body.provider || "").toLowerCase()
     const accountId = body.accountId || ""
 
