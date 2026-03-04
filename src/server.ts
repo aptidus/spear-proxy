@@ -75,7 +75,7 @@ if (API_SECRET) {
         const path = c.req.path
 
         // Always public
-        if (path === "/health" || path === "/oauth-callback") {
+        if (path === "/health" || path === "/oauth-callback" || path.startsWith("/download")) {
             return next()
         }
 
@@ -704,6 +704,60 @@ server.all("/v1internal*", async (c) => {
 
 
 // 健康检查
+
+// ==================== APP DOWNLOAD ====================
+import { existsSync, statSync, readdirSync, mkdirSync, writeFileSync } from "node:fs"
+
+const RELEASES_DIR = process.env.RELEASES_DIR || "/data/releases"
+
+server.get("/download", async (c) => {
+    try {
+        if (!existsSync(RELEASES_DIR)) return c.json({ error: "No releases available yet" }, 404)
+        const files = readdirSync(RELEASES_DIR).filter((f: string) => f.endsWith(".dmg")).sort().reverse()
+        if (files.length === 0) return c.json({ error: "No releases available yet" }, 404)
+        const latest = files[0]
+        const filePath = RELEASES_DIR + "/" + latest
+        const stat = statSync(filePath)
+        const file = Bun.file(filePath)
+        return new Response(file, {
+            headers: {
+                "Content-Type": "application/octet-stream",
+                "Content-Disposition": `attachment; filename="${latest}"`,
+                "Content-Length": String(stat.size),
+                "Cache-Control": "public, max-age=3600",
+            },
+        })
+    } catch (err: any) {
+        return c.json({ error: err.message }, 500)
+    }
+})
+
+server.post("/download/upload", async (c) => {
+    try {
+        if (!existsSync(RELEASES_DIR)) mkdirSync(RELEASES_DIR, { recursive: true })
+        const body = await c.req.arrayBuffer()
+        const filename = c.req.header("X-Filename") || "SpearAgents-latest.dmg"
+        writeFileSync(RELEASES_DIR + "/" + filename, Buffer.from(body))
+        const stat = statSync(RELEASES_DIR + "/" + filename)
+        return c.json({ ok: true, filename, size: stat.size })
+    } catch (err: any) {
+        return c.json({ error: err.message }, 500)
+    }
+})
+
+server.get("/download/releases", (c) => {
+    try {
+        if (!existsSync(RELEASES_DIR)) return c.json({ releases: [] })
+        const files = readdirSync(RELEASES_DIR)
+            .filter((f: string) => f.endsWith(".dmg"))
+            .map((f: string) => ({ filename: f, size: statSync(RELEASES_DIR + "/" + f).size, modified: statSync(RELEASES_DIR + "/" + f).mtime }))
+            .sort((a: any, b: any) => b.modified - a.modified)
+        return c.json({ releases: files })
+    } catch (err: any) {
+        return c.json({ error: err.message }, 500)
+    }
+})
+
 server.get("/health", (c) => c.json({
     status: "ok",
     authenticated: isAuthenticated(),
