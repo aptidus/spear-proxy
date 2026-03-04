@@ -275,17 +275,24 @@ async function callProxy(params: {
  * This tests exactly what Spear Agents agents do: auth, routing, multi-tool calling.
  */
 export async function testAccountModels(
-    _provider: string,
-    _accountId: string
+    provider: string,
+    accountId: string
 ): Promise<ModelTestResult[]> {
     const apiKey = getInternalKey()
     if (!apiKey) {
         throw new Error("No API key available for testing. Create one in the dashboard or set ANTI_API_SECRET.")
     }
 
-    // Get all flow route model IDs — these are what agents actually use
+    // Only test flow routes that include this provider+account in their entries
     const config = loadRoutingConfig()
-    const flowModels = (config.flows || []).map(f => f.name).filter(Boolean)
+    const allFlows = (config.flows || []).filter(f => f.name && f.entries?.length > 0)
+    const relevantFlows = allFlows.filter(flow =>
+        flow.entries.some(entry =>
+            entry.provider === provider && (entry.accountId === accountId || entry.accountId === "auto")
+        )
+    )
+    // If no flows match this account specifically, test all flows (backward compat)
+    const flowModels = (relevantFlows.length > 0 ? relevantFlows : allFlows).map(f => f.name).filter(Boolean)
 
     if (flowModels.length === 0) {
         throw new Error("No flow routes configured. Add flow routes in the routing dashboard.")
