@@ -1553,28 +1553,42 @@
                     resultsDiv.innerHTML = data.results.map(r => {
                         const check = '✓';
                         const cross = '✗';
-                        const agenticIcon = r.agentic ? `<span class="text-emerald-400">${check}</span>` : `<span class="text-red-400">${cross}</span>`;
-                        const toolIcon = r.toolCall ? `<span class="text-emerald-400">${check}</span>` : `<span class="text-red-400">${cross}</span>`;
-                        const thinkIcon = r.thinking ? `<span class="text-emerald-400">${check}</span>` : `<span class="text-gray-600">—</span>`;
+                        const isRateLimited = r.error === 'Rate limited';
                         const latency = (r.latencyMs / 1000).toFixed(1);
-                        const errorHtml = r.error ? `<div class="text-[9px] text-red-400 truncate mt-0.5">${r.error}</div>` : '';
-                        // Show flow route → upstream model → account (full routing chain)
-                        const shortModel = r.modelId.replace('claude-', '').replace('gemini-', 'g-');
+                        const shortModel = r.modelId;
+                        // Show upstream model if available
                         const upstreamModel = r.upstreamModel ? r.upstreamModel.replace('models/', '').replace('claude-', '') : '';
-                        const routeChain = r.upstreamModel
-                            ? `<span class="text-blue-400 font-mono truncate" title="Route: ${r.modelId} → ${r.upstreamModel} via ${r.upstreamProvider || '?'} (${r.upstreamAccount || '?'})"> → ${upstreamModel}</span>`
+                        const routeChain = upstreamModel
+                            ? `<span class="text-blue-400 font-mono truncate" title="${r.upstreamModel} via ${r.upstreamProvider || '?'}"> → ${upstreamModel}</span>`
                             : '';
+
+                        // Status: green check = OK, yellow = rate limited, red = error
+                        let statusIcon;
+                        let statusLabel;
+                        if (r.error && !isRateLimited) {
+                            statusIcon = `<span class="text-red-400">${cross}</span>`;
+                            statusLabel = `<span class="text-red-400">err</span>`;
+                        } else if (isRateLimited) {
+                            statusIcon = `<span class="text-yellow-400">⏳</span>`;
+                            statusLabel = `<span class="text-yellow-400">429</span>`;
+                        } else {
+                            statusIcon = `<span class="text-emerald-400">${check}</span>`;
+                            statusLabel = `<span class="text-gray-500">${latency}s</span>`;
+                        }
+
+                        const errorHtml = (r.error && !isRateLimited)
+                            ? `<div class="text-[9px] text-red-400 truncate mt-0.5">${r.error}</div>`
+                            : '';
+
                         return `
                             <div class="flex items-center justify-between text-[10px] py-1 border-t border-gray-800/50">
-                                <div class="flex items-center gap-1 truncate max-w-[220px]">
+                                <div class="flex items-center gap-1 truncate max-w-[200px]">
+                                    ${statusIcon}
                                     <span class="text-gray-400 font-mono truncate" title="${r.modelId}">${shortModel}</span>
                                     ${routeChain}
                                 </div>
                                 <div class="flex items-center gap-2 text-[10px]">
-                                    <span title="Agentic (system prompt + tools)">${agenticIcon}</span>
-                                    <span title="Tool Call (tool_choice=any)">${toolIcon}</span>
-                                    <span title="Thinking">${thinkIcon}</span>
-                                    <span class="text-gray-500 w-8 text-right">${latency}s</span>
+                                    ${statusLabel}
                                 </div>
                             </div>
                             ${errorHtml}
