@@ -1551,8 +1551,8 @@
                 if (data.success && data.results && resultsDiv) {
                     resultsDiv.classList.remove('hidden');
                     if (data.results.length === 0) {
-                        resultsDiv.innerHTML = '<div class="text-[10px] text-gray-500 py-1">No flow routes configured for this provider</div>';
-                        showToast('No flow routes for this provider');
+                        resultsDiv.innerHTML = '<div class="text-[10px] text-gray-500 py-1">No models assigned to this provider in flow routes</div>';
+                        showToast('No models assigned to this provider');
                     } else {
                     resultsDiv.innerHTML = data.results.map(r => {
                         const check = '✓';

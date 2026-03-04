@@ -183,12 +183,17 @@ function isOfficialModel(model: string): boolean {
 function normalizeEntries(entries: RoutingEntry[]): RoutingEntry[] {
     return entries.filter(entry => {
         if (entry.provider === "codex" && isHiddenCodexModel(entry.modelId)) {
+            console.log(`[routing] filtered entry: ${entry.provider}/${entry.modelId} — hidden codex model`)
             return false
         }
-        if (!isEntryUsable(entry)) return false
-        // 🆕 Antigravity 账号需检查是否存在于 accountManager
+        if (!isEntryUsable(entry)) {
+            console.log(`[routing] filtered entry: ${entry.provider}/${entry.modelId} (account=${entry.accountId}) — not usable (no account found in auth store)`)
+            return false
+        }
+        // Antigravity 账号需检查是否存在于 accountManager
         if (entry.provider === "antigravity" && entry.accountId !== "auto") {
             if (!accountManager.hasAccount(entry.accountId)) {
+                console.log(`[routing] filtered entry: ${entry.provider}/${entry.modelId} (account=${entry.accountId}) — accountManager.hasAccount=false`)
                 return false
             }
         }
