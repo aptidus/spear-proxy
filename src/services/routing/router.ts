@@ -532,7 +532,7 @@ async function createFlowCompletionWithEntries(request: RoutedRequest, entries: 
             const result = await createCodexCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
             recordProviderUsage(entry.modelId, result)
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-            console.log(formatSuccessLine({ elapsed, model: request.model, provider: "codex", account: accountDisplay, routeTag: "fr" }))
+            console.log(formatSuccessLine({ elapsed, model: entry.modelId, provider: "codex", account: accountDisplay, routeTag: "fr" }))
             return result
         }
 
@@ -541,7 +541,7 @@ async function createFlowCompletionWithEntries(request: RoutedRequest, entries: 
             const result = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
             recordProviderUsage(entry.modelId, result)
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-            console.log(formatSuccessLine({ elapsed, model: request.model, provider: "copilot", account: accountDisplay, routeTag: "fr" }))
+            console.log(formatSuccessLine({ elapsed, model: entry.modelId, provider: "copilot", account: accountDisplay, routeTag: "fr" }))
             return result
         }
 
@@ -550,7 +550,7 @@ async function createFlowCompletionWithEntries(request: RoutedRequest, entries: 
             const result = await createAnthropicCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
             recordProviderUsage(entry.modelId, result)
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-            console.log(formatSuccessLine({ elapsed, model: request.model, provider: "anthropic", account: accountDisplay, routeTag: "fr" }))
+            console.log(formatSuccessLine({ elapsed, model: entry.modelId, provider: "anthropic", account: accountDisplay, routeTag: "fr" }))
             return result
         }
 
@@ -659,7 +659,7 @@ async function createFlowCompletionWithEntries(request: RoutedRequest, entries: 
                 const result = await createCodexCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
                 recordProviderUsage(entry.modelId, result)
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-                console.log(formatSuccessLine({ elapsed, model: request.model, provider: "codex", account: accountDisplay, routeTag: "fr" }))
+                console.log(formatSuccessLine({ elapsed, model: entry.modelId, provider: "codex", account: accountDisplay, routeTag: "fr" }))
                 return result
             }
 
@@ -668,7 +668,7 @@ async function createFlowCompletionWithEntries(request: RoutedRequest, entries: 
                 const result = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
                 recordProviderUsage(entry.modelId, result)
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-                console.log(formatSuccessLine({ elapsed, model: request.model, provider: "copilot", account: accountDisplay, routeTag: "fr" }))
+                console.log(formatSuccessLine({ elapsed, model: entry.modelId, provider: "copilot", account: accountDisplay, routeTag: "fr" }))
                 return result
             }
         } catch (error) {
@@ -870,13 +870,32 @@ export async function createRoutedCompletion(request: RoutedRequest) {
 
     const config = loadRoutingConfig()
     const normalizedRequest = { ...request, model: normalizedModel }
+
+    // 1. Try explicit flow name match first (e.g., "Codex" → Codex flow)
+    //    Flow names never contain digits; actual model IDs always do.
+    const explicitFlowEntries = selectFlowEntries(config, normalizedModel)
+    if (explicitFlowEntries.length > 0) {
+        const flowKey = getFlowKey(normalizedModel)
+        let rawEntries = explicitFlowEntries
+        if (providerHint) {
+            const filtered = rawEntries.filter(e => e.provider === providerHint)
+            if (filtered.length > 0) rawEntries = filtered
+        }
+        const flowEntries = normalizeEntries(rawEntries)
+        if (flowEntries.length > 0) {
+            return createFlowCompletionWithEntries(normalizedRequest, flowEntries, flowKey)
+        }
+    }
+
+    // 2. Active flow fallback: only when no explicit flow matched
     const activeFlow = resolveActiveFlowSelection(config)
     if (activeFlow && !providerHint) {
         return createFlowCompletionWithEntries(normalizedRequest, activeFlow.entries, activeFlow.flowKey)
     }
+
+    // 3. Official model ID routing (e.g., "claude-opus-4-6-thinking")
     if (isOfficialModel(normalizedModel)) {
         let accountEntries = resolveAccountEntries(config, normalizedModel)
-        // If provider hint specified, filter entries to that provider only
         if (providerHint) {
             const filtered = accountEntries.filter(e => e.provider === providerHint)
             if (filtered.length > 0) accountEntries = filtered
@@ -884,18 +903,7 @@ export async function createRoutedCompletion(request: RoutedRequest) {
         return createAccountCompletionWithEntries(normalizedRequest, accountEntries)
     }
 
-    const flowKey = getFlowKey(normalizedModel)
-    let rawEntries = selectFlowEntries(config, normalizedModel)
-    // Filter by provider BEFORE normalizeEntries (which may remove entries by account status)
-    if (providerHint) {
-        const filtered = rawEntries.filter(e => e.provider === providerHint)
-        if (filtered.length > 0) rawEntries = filtered
-    }
-    const flowEntries = normalizeEntries(rawEntries)
-    if (flowEntries.length === 0) {
-        throw new RoutingError(`No usable entries for model "${normalizedModel}" with provider "${providerHint || "any"}"`, 400)
-    }
-    return createFlowCompletionWithEntries(normalizedRequest, flowEntries, flowKey)
+    throw new RoutingError(`No usable entries for model "${normalizedModel}" with provider "${providerHint || "any"}"`, 400)
 }
 
 async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, entries: RoutingEntry[], flowKey?: string): AsyncGenerator<string, void, unknown> {
@@ -974,10 +982,10 @@ async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, en
 
         if (entry.provider === "codex") {
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-            console.log(formatSuccessLine({ elapsed, model: request.model, provider: "codex", account: accountDisplay, routeTag: "fr" }))
+            console.log(formatSuccessLine({ elapsed, model: entry.modelId, provider: "codex", account: accountDisplay, routeTag: "fr" }))
         } else if (entry.provider === "copilot") {
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-            console.log(formatSuccessLine({ elapsed, model: request.model, provider: "copilot", account: accountDisplay, routeTag: "fr" }))
+            console.log(formatSuccessLine({ elapsed, model: entry.modelId, provider: "copilot", account: accountDisplay, routeTag: "fr" }))
         }
     }
 
@@ -1300,35 +1308,41 @@ export async function* createRoutedCompletionStream(request: RoutedRequest): Asy
     }
 
     const config = loadRoutingConfig()
+    const normalizedRequest = { ...request, model: normalizedModel }
+
+    // 1. Try explicit flow name match first (e.g., "Codex" → Codex flow)
+    const explicitFlowEntries = selectFlowEntries(config, normalizedModel)
+    if (explicitFlowEntries.length > 0) {
+        const flowKey = getFlowKey(normalizedModel)
+        let rawEntries = explicitFlowEntries
+        if (providerHint) {
+            const filtered = rawEntries.filter(e => e.provider === providerHint)
+            if (filtered.length > 0) rawEntries = filtered
+        }
+        const flowEntries = normalizeEntries(rawEntries)
+        if (flowEntries.length > 0) {
+            yield* createFlowCompletionStreamWithEntries(normalizedRequest, flowEntries, flowKey)
+            return
+        }
+    }
+
+    // 2. Active flow fallback: only when no explicit flow matched
     const activeFlow = resolveActiveFlowSelection(config)
     if (activeFlow && !providerHint) {
-        yield* createFlowCompletionStreamWithEntries(request, activeFlow.entries, activeFlow.flowKey)
+        yield* createFlowCompletionStreamWithEntries(normalizedRequest, activeFlow.entries, activeFlow.flowKey)
         return
     }
 
+    // 3. Official model ID routing
     if (isOfficialModel(normalizedModel)) {
         let accountEntries = resolveAccountEntries(config, normalizedModel)
-        // If provider hint specified, filter entries to that provider only
         if (providerHint) {
             const filtered = accountEntries.filter(e => e.provider === providerHint)
             if (filtered.length > 0) accountEntries = filtered
         }
-        const normalizedRequest = { ...request, model: normalizedModel }
         yield* createAccountCompletionStreamWithEntries(normalizedRequest, accountEntries)
         return
     }
 
-    const normalizedRequest = { ...request, model: normalizedModel }
-    const flowKey = getFlowKey(normalizedModel)
-    let rawEntries = selectFlowEntries(config, normalizedModel)
-    // Filter by provider BEFORE normalizeEntries (which may remove entries by account status)
-    if (providerHint) {
-        const filtered = rawEntries.filter(e => e.provider === providerHint)
-        if (filtered.length > 0) rawEntries = filtered
-    }
-    const flowEntries = normalizeEntries(rawEntries)
-    if (flowEntries.length === 0) {
-        throw new RoutingError(`No usable entries for model "${normalizedModel}" with provider "${providerHint || "any"}"`, 400)
-    }
-    yield* createFlowCompletionStreamWithEntries(normalizedRequest, flowEntries, flowKey)
+    throw new RoutingError(`No usable entries for model "${normalizedModel}" with provider "${providerHint || "any"}"`, 400)
 }

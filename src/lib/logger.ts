@@ -16,6 +16,7 @@ const PROVIDER_LABELS: Record<string, string> = {
     copilot: "Copilot",
     codex: "Codex",
     antigravity: "Cloud",
+    anthropic: "Anthropic",
 }
 
 // Request context for logging (set by router, read by middleware)
