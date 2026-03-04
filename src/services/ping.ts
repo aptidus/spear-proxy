@@ -294,24 +294,23 @@ export async function testAccountModels(
         throw new Error("No API key available for testing. Create one in the dashboard or set ANTI_API_SECRET.")
     }
 
-    // Only test flow routes that include this provider+account in their entries
+    // Only test flow routes that include this provider in their entries
     const config = loadRoutingConfig()
     const allFlows = (config.flows || []).filter(f => f.name && f.entries?.length > 0)
     const relevantFlows = allFlows.filter(flow =>
-        flow.entries.some(entry =>
-            entry.provider === provider && (entry.accountId === accountId || entry.accountId === "auto")
-        )
+        flow.entries.some(entry => entry.provider === provider)
     )
-    // If no flows match this account specifically, test all flows (backward compat)
-    const flowModels = (relevantFlows.length > 0 ? relevantFlows : allFlows).map(f => f.name).filter(Boolean)
 
-    if (flowModels.length === 0) {
-        throw new Error("No flow routes configured. Add flow routes in the routing dashboard.")
+    if (relevantFlows.length === 0) {
+        throw new Error(`No flow routes contain entries for provider "${provider}".`)
     }
 
     const results: ModelTestResult[] = []
 
-    for (const modelId of flowModels) {
+    for (const flow of relevantFlows) {
+        const modelId = flow.name
+        // Find the specific entry for this provider to show what upstream model will be used
+        const providerEntry = flow.entries.find(e => e.provider === provider)
         const result: ModelTestResult = {
             modelId,
             agentic: false,
@@ -323,10 +322,11 @@ export async function testAccountModels(
         const start = Date.now()
 
         try {
-            // Full agent pipeline test: system prompt + tools + tool_choice=any
-            // Identical to how Spear Agents dispatches work to upstream models
+            // Use @provider hint to force routing through the specific provider being tested
+            // e.g., "Opus-thinking@anthropic" forces the router to use only Anthropic entries
+            const modelWithHint = `${modelId}@${provider}`
             const response = await callProxy({
-                model: modelId,
+                model: modelWithHint,
                 messages: [
                     {
                         role: "system",

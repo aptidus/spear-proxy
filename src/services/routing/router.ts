@@ -837,7 +837,13 @@ export async function createRoutedCompletion(request: RoutedRequest) {
     }
 
     const flowSelection = resolveFlowSelection(config, normalizedModel)
-    return createFlowCompletionWithEntries(normalizedRequest, flowSelection.entries, flowSelection.flowKey)
+    let flowEntries = flowSelection.entries
+    // If provider hint specified, filter flow entries to that provider only
+    if (providerHint) {
+        const filtered = flowEntries.filter(e => e.provider === providerHint)
+        if (filtered.length > 0) flowEntries = filtered
+    }
+    return createFlowCompletionWithEntries(normalizedRequest, flowEntries, flowSelection.flowKey)
 }
 
 async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, entries: RoutingEntry[], flowKey?: string): AsyncGenerator<string, void, unknown> {
@@ -1250,5 +1256,11 @@ export async function* createRoutedCompletionStream(request: RoutedRequest): Asy
 
     const normalizedRequest = { ...request, model: normalizedModel }
     const flowSelection = resolveFlowSelection(config, normalizedModel)
-    yield* createFlowCompletionStreamWithEntries(normalizedRequest, flowSelection.entries, flowSelection.flowKey)
+    let flowEntries = flowSelection.entries
+    // If provider hint specified, filter flow entries to that provider only
+    if (providerHint) {
+        const filtered = flowEntries.filter(e => e.provider === providerHint)
+        if (filtered.length > 0) flowEntries = filtered
+    }
+    yield* createFlowCompletionStreamWithEntries(normalizedRequest, flowEntries, flowSelection.flowKey)
 }
