@@ -294,7 +294,7 @@ export async function testAccountModels(
         throw new Error("No API key available for testing. Create one in the dashboard or set ANTI_API_SECRET.")
     }
 
-    // Only test flow routes that include this provider in their entries
+    // Find flow routes that include this provider in their entries
     const config = loadRoutingConfig()
     const allFlows = (config.flows || []).filter(f => f.name && f.entries?.length > 0)
     const relevantFlows = allFlows.filter(flow =>
@@ -302,12 +302,19 @@ export async function testAccountModels(
     )
 
     if (relevantFlows.length === 0) {
-        throw new Error(`No flow routes contain entries for provider "${provider}".`)
+        // No flow routes have this exact provider — return empty results (not an error)
+        // This happens e.g. for "anthropic" accounts when flows use "antigravity" entries for Claude
+        return []
     }
 
     const results: ModelTestResult[] = []
 
     for (const flow of relevantFlows) {
+        // Wait between requests to avoid hitting upstream rate limits
+        if (results.length > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1500))
+        }
+
         const flowName = flow.name
         // Find the specific entry for this provider — this is the ACTUAL model that will be called
         const providerEntry = flow.entries.find(e => e.provider === provider)

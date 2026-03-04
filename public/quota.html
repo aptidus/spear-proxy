@@ -1550,6 +1550,10 @@
 
                 if (data.success && data.results && resultsDiv) {
                     resultsDiv.classList.remove('hidden');
+                    if (data.results.length === 0) {
+                        resultsDiv.innerHTML = '<div class="text-[10px] text-gray-500 py-1">No flow routes configured for this provider</div>';
+                        showToast('No flow routes for this provider');
+                    } else {
                     resultsDiv.innerHTML = data.results.map(r => {
                         const check = '✓';
                         const cross = '✗';
@@ -1582,6 +1586,7 @@
                         `;
                     }).join('');
                     showToast(`Tested ${data.results.length} model(s)`);
+                    } // end else (has results)
                 } else if (data.error) {
                     showToast(`Test failed: ${data.error}`);
                 }
