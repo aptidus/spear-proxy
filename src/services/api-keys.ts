@@ -109,6 +109,11 @@ export function getKeyLabel(key: string): string | null {
     return entry?.label || null
 }
 
+/** Check if a key is the admin key (ANTI_API_SECRET) — grants direct model access */
+export function isAdminKey(key: string): boolean {
+    return !!key && !!store.adminKey && key === store.adminKey
+}
+
 /** Get a valid API key for internal use (admin key or first generated key) */
 export function getInternalKey(): string | null {
     if (store.adminKey) return store.adminKey

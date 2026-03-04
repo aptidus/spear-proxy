@@ -143,48 +143,6 @@ const AGENT_TOOLS: { type: "function"; function: { name: string; description: st
             },
         },
     },
-    {
-        type: "function",
-        function: {
-            name: "update_progress",
-            description: "Update the visible progress checklist shown to the user.",
-            parameters: {
-                type: "object",
-                properties: {
-                    todos: {
-                        type: "array",
-                        items: {
-                            type: "object",
-                            properties: {
-                                content: { type: "string", description: "Step description" },
-                                status: { type: "string", description: "pending, in_progress, or completed" },
-                            },
-                            required: ["content", "status"],
-                        },
-                        description: "Array of todo items",
-                    },
-                },
-                required: ["todos"],
-            },
-        },
-    },
-    {
-        type: "function",
-        function: {
-            name: "store_knowledge",
-            description: "Save a reusable fact or lesson learned about a project. Persistent across sessions.",
-            parameters: {
-                type: "object",
-                properties: {
-                    project_name: { type: "string", description: "Project name" },
-                    title: { type: "string", description: "Knowledge title" },
-                    content: { type: "string", description: "Knowledge content" },
-                    category: { type: "string", description: "Category: fact, skill, endpoint, auth, error" },
-                },
-                required: ["project_name", "title", "content"],
-            },
-        },
-    },
 ]
 
 export interface ModelTestResult {
@@ -210,18 +168,17 @@ function getProxyBaseUrl(): string {
 }
 
 /**
- * Call our own /v1/chat/completions endpoint — simulating the full agent pipeline.
- * This tests the COMPLETE chain that Spear Agents uses:
- *   API key auth → flow route resolution → provider/account selection → upstream call → response translation
+ * Call our own /v1/chat/completions endpoint with full agentic payload.
+ * Uses the admin API key which grants direct model access (bypasses flow route enforcement).
  *
- * The request includes a system prompt, multi-tool spec, and tool_choice=any — identical to how
- * Spear Agents dispatches agentic tasks through the proxy.
+ * The request matches what Spear Agents sends: system prompt, multi-tool spec, tool_choice=any.
  */
 interface ProxyResponse {
     choices: Array<{
         message: {
             role: string
             content: string | null
+            reasoning_content?: string
             tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>
         }
         finish_reason: string
@@ -248,7 +205,6 @@ async function callProxy(params: {
         headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${params.apiKey}`,
-            // Exact same headers Spear Agents uses for agent dispatch
             "User-Agent": "SpearAgents/1.0 (agent-pipeline-test)",
             "X-Request-Source": "spear-agents-ping",
         },
@@ -257,10 +213,10 @@ async function callProxy(params: {
             messages: params.messages,
             tools: params.tools,
             tool_choice: params.tool_choice || "auto",
-            max_tokens: params.max_tokens || 256,
+            max_tokens: params.max_tokens || 1024,
             stream: false,
         }),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(120_000),
     })
 
     if (!resp.ok) {
@@ -270,7 +226,7 @@ async function callProxy(params: {
 
     const json = await resp.json()
 
-    // Extract upstream routing info from response headers — confirms full routing chain executed
+    // Extract upstream routing info from response headers
     json._upstream = {
         model: resp.headers.get("x-upstream-model") || undefined,
         provider: resp.headers.get("x-upstream-provider") || undefined,
@@ -282,8 +238,17 @@ async function callProxy(params: {
 }
 
 /**
- * Test all flow route models: call our own proxy endpoint with a valid API key.
- * This tests exactly what Spear Agents agents do: auth, routing, multi-tool calling.
+ * Test each ACTUAL upstream model assigned to a provider's flow route entries.
+ *
+ * For each provider card on the quota dashboard, this finds the real model IDs
+ * (e.g. claude-opus-4-6-thinking, gpt-5.3-codex) from the flow router entries,
+ * then calls each one directly through the proxy using the admin key + @provider hint.
+ *
+ * The admin key bypasses flow route enforcement, allowing actual model IDs (with version numbers).
+ * The @provider hint tells the router to dispatch directly to the specified provider.
+ *
+ * Each test sends a full agentic payload (system prompt + 9 tools + tool_choice=any)
+ * to verify: agentic capability, tool calling, and thinking/reasoning.
  */
 export async function testAccountModels(
     provider: string,
@@ -291,37 +256,37 @@ export async function testAccountModels(
 ): Promise<ModelTestResult[]> {
     const apiKey = getInternalKey()
     if (!apiKey) {
-        throw new Error("No API key available for testing. Create one in the dashboard or set ANTI_API_SECRET.")
+        throw new Error("No API key available for testing. Set ANTI_API_SECRET env var.")
     }
 
-    // Find flow routes that include this provider in their entries
+    // Collect unique actual model IDs assigned to this provider across all flow routes
     const config = loadRoutingConfig()
     const allFlows = (config.flows || []).filter(f => f.name && f.entries?.length > 0)
-    const relevantFlows = allFlows.filter(flow =>
-        flow.entries.some(entry => entry.provider === provider)
-    )
 
-    if (relevantFlows.length === 0) {
-        // No flow routes have this exact provider — return empty results (not an error)
-        // This happens e.g. for "anthropic" accounts when flows use "antigravity" entries for Claude
+    const seenModels = new Set<string>()
+    const modelsToTest: string[] = []
+
+    for (const flow of allFlows) {
+        for (const entry of flow.entries) {
+            if (entry.provider === provider && entry.modelId && !seenModels.has(entry.modelId)) {
+                seenModels.add(entry.modelId)
+                modelsToTest.push(entry.modelId)
+            }
+        }
+    }
+
+    if (modelsToTest.length === 0) {
         return []
     }
 
     const results: ModelTestResult[] = []
 
-    for (const flow of relevantFlows) {
-        // Wait between requests to avoid hitting upstream rate limits
+    for (const actualModelId of modelsToTest) {
+        // Sequential: wait between requests to avoid upstream rate limits
         if (results.length > 0) {
-            await new Promise(resolve => setTimeout(resolve, 1500))
+            await new Promise(resolve => setTimeout(resolve, 2000))
         }
 
-        const flowName = flow.name
-        // Find the specific entry for this provider — this is the ACTUAL model that will be called
-        const providerEntry = flow.entries.find(e => e.provider === provider)
-        if (!providerEntry) continue
-
-        // Display the actual upstream model ID, not the flow route name
-        const actualModelId = providerEntry.modelId
         const result: ModelTestResult = {
             modelId: actualModelId,
             agentic: false,
@@ -330,37 +295,31 @@ export async function testAccountModels(
             latencyMs: 0,
         }
 
-        // Determine thinking capability from the actual model name
-        const modelLower = actualModelId.toLowerCase()
-        result.thinking = modelLower.includes("thinking")
-            || modelLower.includes("pro")
-            || modelLower.includes("codex")  // Codex models have reasoning/thinking
-            || modelLower.includes("-high")  // high reasoning effort = thinking
-            || modelLower.includes("-max")   // max reasoning effort = thinking
-
         const start = Date.now()
 
         try {
-            // Use @provider hint to force routing through the specific provider being tested
-            const modelWithHint = `${flowName}@${provider}`
+            // Call actual model ID directly with @provider hint
+            // Admin key → bypasses enforceFlowRouteOnly() → direct routing to provider
+            const modelWithHint = `${actualModelId}@${provider}`
 
-            // Lightweight ping: just verify routing works, don't burn quota
             const response = await callProxy({
                 model: modelWithHint,
                 messages: [
+                    { role: "system", content: AGENT_SYSTEM_PROMPT },
                     {
                         role: "user",
-                        content: "Reply with exactly: pong",
+                        content: "List the files in the /tmp directory. Use the list_directory tool.",
                     },
                 ],
-                max_tokens: 16,
+                tools: AGENT_TOOLS,
+                tool_choice: "any",
+                max_tokens: 1024,
                 apiKey,
             })
 
-            result.agentic = true
             result.latencyMs = Date.now() - start
 
-            // Capture upstream routing info from response headers
+            // Capture upstream routing info
             if (response._upstream) {
                 result.upstreamModel = response._upstream.model
                 result.upstreamProvider = response._upstream.provider
@@ -369,20 +328,28 @@ export async function testAccountModels(
             }
 
             const choice = response.choices?.[0]
-            result.toolCall = !!choice?.message?.content
+            if (choice) {
+                // Agentic: model responded successfully
+                result.agentic = true
 
-            console.log(`[ping] ${flowName} → ${actualModelId} [${provider}] ${result.latencyMs}ms OK`)
+                // Tool call: model called at least one tool
+                result.toolCall = !!(choice.message?.tool_calls && choice.message.tool_calls.length > 0)
+
+                // Thinking: model returned reasoning content (extended thinking)
+                result.thinking = !!(choice.message?.reasoning_content)
+            }
+
+            console.log(`[ping] ${actualModelId} [${provider}] ${result.latencyMs}ms — agentic:${result.agentic} tool:${result.toolCall} think:${result.thinking}`)
         } catch (error) {
             result.latencyMs = Date.now() - start
             const msg = (error as Error).message || "Unknown error"
-            // Distinguish rate limits from real errors
             if (msg.startsWith("429")) {
                 result.error = "Rate limited"
                 result.agentic = true // routing worked, just rate-limited
-                console.log(`[ping] ${flowName} → ${actualModelId}: 429 rate limited`)
+                console.log(`[ping] ${actualModelId} [${provider}]: 429 rate limited`)
             } else {
                 result.error = msg.slice(0, 200)
-                console.log(`[ping] ${flowName} → ${actualModelId}: ERROR ${result.error}`)
+                console.log(`[ping] ${actualModelId} [${provider}]: ERROR ${result.error}`)
             }
         }
 
@@ -402,7 +369,7 @@ export async function pingAccount(
 ): Promise<{ modelId: string; latencyMs: number }> {
     const apiKey = getInternalKey()
     if (!apiKey) {
-        throw new Error("No API key available for ping. Create one in the dashboard or set ANTI_API_SECRET.")
+        throw new Error("No API key available for ping. Set ANTI_API_SECRET env var.")
     }
 
     // Use provided modelId, or first flow route, or fallback

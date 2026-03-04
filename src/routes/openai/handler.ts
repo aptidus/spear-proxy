@@ -68,12 +68,17 @@ export async function handleChatCompletion(c: Context): Promise<Response> {
 
         let result
         try {
-            result = await createRoutedCompletion({
+            const routedRequest: any = {
                 model: anthropicModel,
                 messages,
                 tools,
                 maxTokens: payload.max_tokens || 4096,
-            })
+            }
+            // Admin key grants direct model access (bypasses flow route enforcement)
+            if ((globalThis as any).__isAdminRequest) {
+                routedRequest.internal = true
+            }
+            result = await createRoutedCompletion(routedRequest)
         } catch (error) {
             if (error instanceof RoutingError) {
                 c.header("X-Log-Reason", buildValidationReason(error.message))
@@ -153,12 +158,16 @@ async function handleStreamCompletion(
 
     return streamSSE(c, async (stream) => {
         try {
-            const chatStream = createRoutedCompletionStream({
+            const streamRequest: any = {
                 model: anthropicModel,
                 messages,
                 tools,
                 maxTokens: payload.max_tokens || 4096,
-            })
+            }
+            if ((globalThis as any).__isAdminRequest) {
+                streamRequest.internal = true
+            }
+            const chatStream = createRoutedCompletionStream(streamRequest)
 
             let sentRole = false
             let accumulatedToolCalls: any[] = []

@@ -810,9 +810,42 @@ function enforceFlowRouteOnly(model: string, isInternal?: boolean): void {
     }
 }
 
+/**
+ * Internal direct model routing: when admin key is used with an actual model ID + @provider hint,
+ * create a synthetic routing entry and dispatch directly — bypassing flow route resolution.
+ * This is used by the ping/test system to test each actual upstream model.
+ */
+function resolveInternalDirectEntry(model: string, provider: AuthProvider, accountId?: string): RoutingEntry | null {
+    if (provider === "antigravity") {
+        // Antigravity uses accountManager, find first available account or use provided
+        const targetAccountId = accountId || "auto"
+        return {
+            id: "internal-direct",
+            provider,
+            accountId: targetAccountId,
+            modelId: model,
+            label: `${provider}:${model}`,
+        }
+    }
+    // For codex/copilot/anthropic, find the first available account for this provider
+    const accounts = authStore.listAccounts(provider)
+    const targetAccount = accountId
+        ? accounts.find(a => a.id === accountId)
+        : accounts[0]
+    if (!targetAccount) return null
+    return {
+        id: "internal-direct",
+        provider,
+        accountId: targetAccount.id,
+        modelId: model,
+        label: `${provider}:${model}`,
+    }
+}
+
 export async function createRoutedCompletion(request: RoutedRequest) {
+    const isInternal = (request as any).internal
     // Enforce flow-route-only: reject raw provider model IDs with version numbers
-    enforceFlowRouteOnly(request.model, (request as any).internal)
+    enforceFlowRouteOnly(request.model, isInternal)
 
     // Parse @provider hint (e.g., "claude-sonnet-4-5@anthropic")
     const { model: rawModel, providerHint } = parseProviderHint(request.model)
@@ -820,6 +853,16 @@ export async function createRoutedCompletion(request: RoutedRequest) {
     if (isHiddenCodexModel(normalizedModel)) {
         throw new RoutingError("Model is not available", 400)
     }
+
+    // Internal direct routing: admin key + actual model ID + @provider → direct dispatch
+    if (isInternal && providerHint) {
+        const directEntry = resolveInternalDirectEntry(normalizedModel, providerHint)
+        if (directEntry) {
+            const normalizedRequest = { ...request, model: normalizedModel }
+            return createFlowCompletionWithEntries(normalizedRequest, [directEntry], `direct-${normalizedModel}`)
+        }
+    }
+
     const config = loadRoutingConfig()
     const normalizedRequest = { ...request, model: normalizedModel }
     const activeFlow = resolveActiveFlowSelection(config)
@@ -1230,8 +1273,9 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
 }
 
 export async function* createRoutedCompletionStream(request: RoutedRequest): AsyncGenerator<string, void, unknown> {
+    const isInternal = (request as any).internal
     // Enforce flow-route-only: reject raw provider model IDs with version numbers
-    enforceFlowRouteOnly(request.model, (request as any).internal)
+    enforceFlowRouteOnly(request.model, isInternal)
 
     // Parse @provider hint (e.g., "claude-sonnet-4-5@anthropic")
     const { model: rawModel, providerHint } = parseProviderHint(request.model)
@@ -1239,6 +1283,17 @@ export async function* createRoutedCompletionStream(request: RoutedRequest): Asy
     if (isHiddenCodexModel(normalizedModel)) {
         throw new RoutingError("Model is not available", 400)
     }
+
+    // Internal direct routing: admin key + actual model ID + @provider → direct dispatch
+    if (isInternal && providerHint) {
+        const directEntry = resolveInternalDirectEntry(normalizedModel, providerHint)
+        if (directEntry) {
+            const normalizedRequest = { ...request, model: normalizedModel }
+            yield* createFlowCompletionStreamWithEntries(normalizedRequest, [directEntry], `direct-${normalizedModel}`)
+            return
+        }
+    }
+
     const config = loadRoutingConfig()
     const activeFlow = resolveActiveFlowSelection(config)
     if (activeFlow && !providerHint) {

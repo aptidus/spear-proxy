@@ -29,7 +29,7 @@ import { authStore } from "./services/auth/store"
 import { formatLogTime, getRequestLogContext } from "./lib/logger"
 import { initLogCapture, setLogCaptureEnabled } from "./lib/log-buffer"
 import { getUsage, resetUsage } from "./services/usage-tracker"
-import { isValidKey, recordKeyUsage, createKey, deleteKey, listKeys, getKeyLabel } from "./services/api-keys"
+import { isValidKey, isAdminKey, recordKeyUsage, createKey, deleteKey, listKeys, getKeyLabel } from "./services/api-keys"
 
 export const server = new Hono()
 
@@ -95,6 +95,12 @@ if (API_SECRET) {
             // Track key usage and store label for per-key usage tracking
             recordKeyUsage(token)
                 ; (globalThis as any).__currentApiKey = getKeyLabel(token) || token
+            // Mark admin key requests — grants direct model access (bypasses flow route enforcement)
+            if (isAdminKey(token)) {
+                ; (globalThis as any).__isAdminRequest = true
+            } else {
+                ; (globalThis as any).__isAdminRequest = false
+            }
             return next()
         }
 
